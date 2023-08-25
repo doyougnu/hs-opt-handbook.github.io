@@ -8,3 +8,4 @@ Case Studies
    sbv_572
    sbv_642
    klister
+   cardano-regression
