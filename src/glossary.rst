@@ -353,6 +353,16 @@ Glossary
       :term:`Known function`. See :cite:t:`fastCurry` for more details on STG
       calling conventions.
 
+   Unfolding
+
+      An Unfolding of an identifier, as defined in ``GHC.Core.Unfold``, is the
+      *approximate* form the identifier would have if the identifier's
+      definition was substituted for the identifier. That is, Unfoldings are
+      generally the right hand sides or bodies of function definitions untouched
+      by optimizations. Unfoldings appear in Core and Interface files to enable
+      cross-module inlining and optimizations. See the :ref:`Reading Core
+      <Core>` chapter for more.
+
 
    WHNF : Normal Forms
 
