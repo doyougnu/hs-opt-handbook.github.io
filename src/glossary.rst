@@ -10,6 +10,12 @@ Glossary
       The arity of a function is the number of arguments the function must take
       to conclude to a result.
 
+   Algebraic Data Type
+
+      First implemented in the Hope programming language
+      :cite:t:`historyOfHaskell` :math:`\ldots{}`
+
+
    Boxed : Levity
 
       A Boxed value is a value that is represented by a pointer to the heap.
