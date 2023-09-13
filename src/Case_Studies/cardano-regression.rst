@@ -10,8 +10,8 @@
 .. |spec|       replace:: ``SPECIALIZE``
 
 
-`Cardano-Ledger: Performance Regression from GHC-8.10.7 to GHC-9.2.8`
-=====================================================================
+`Cardano-Ledger: Performance Regression Updating from GHC-8.10.7 to GHC-9.2.8`
+==============================================================================
 
 This chapter is a case study on a performance regression in the |c-l| code base
 that IOG observed when upgrading the code base from |old| to |new|. To root
@@ -99,4 +99,7 @@ Here is the Core output on |new|:
    I've elided the :term:`Unfolding` for ``size`` and only present the
    ``IdInfo`` for the term. Unfoldings are important to inspect and understand,
    but for our purposes the unfoldings are simply copies of the function body.
-   See :ref:`Unfoldings <Reading Core>` in the Reading Core chapter.
+   See :ref:`Unfoldings <Reading Core>` in the Reading Core chapter. For our
+   purposes, unless stated otherwise all Core will be generated with
+   ``-ddump-simpl`` and no suppression flags. This is purposefully done to show
+   what Core in a real project can look like.
