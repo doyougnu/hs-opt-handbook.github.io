@@ -235,4 +235,4 @@ From the summary comment above the function signature we can see that
 larger Core *is not always* worse than smaller Core; it depends on
 specialization and inlining behavior. In this case, the larger Core is a better
 performing program. On |old| we can see that the local function ``go15`` begins
-pattern matching on some :term:`Algebraic Data Type`...
+pattern matching on an :term:`Algebraic Data Type`.
