@@ -180,7 +180,13 @@ Notice that on |new| the ``DEFAULT`` case calls
                                              ipv4_i2wnX ->
                          case go15_s2zs0 z'_i2wnP ipv3_i2wnW of z''_i2wnZ { __DEFAULT ->
                          case (umElemRDPair @c_a2svV ipv2_i2wnV)
-                         ...
+                              `cast` ((Maybe (Sub (Sym co1_a2szw)))_R
+                                      :: Maybe RDPair ~R# Maybe a_a2szu)
+                         of {
+                           Nothing -> go15_s2zs0 z''_i2wnZ ipv4_i2wnX;
+                           Just x1_iBKi ->
+                             go15_s2zs0 (accum_a2plt z''_i2wnZ x1_iBKi) ipv4_i2wnX
+                             ...
 
 |old|:
 
@@ -220,19 +226,93 @@ Notice that on |new| the ``DEFAULT`` case calls
                          case go15_s8G6Q z'_a8iQB ipv3_a8iQI of z''_a8iQL { __DEFAULT ->
                          case ipv2_a8iQH of {
                            __DEFAULT -> go15_s8G6Q z''_a8iQL ipv4_a8iQJ;
-                           TFEEE dt_d8BOJ dt1_d8BOK ->
+                           TFEEE dt_d8BOJ dt1_d8BOK -> ...
 
 
 These functions are again nearly identical. Both define a function which inputs
 four type variables , and three term variables, and then defines a local
-function called with a recursive let. For example on |old| we have: ``c_a7TVW``,
-``k_a7TVX``, ``b_a7TZI``, and ``a_a7TZJ`` for type variables, ``accum_a7RPi``,
-``ans0_a7RPj``, and ``ds_d8v9s`` for term variables, and ``go15_s8G6Q`` for the
-local recursive function.
+function called with a recursive let. For example, on |old| we have:
+``c_a7TVW``, ``k_a7TVX``, ``b_a7TZI``, and ``a_a7TZJ`` for type variables,
+``accum_a7RPi``, ``ans0_a7RPj``, and ``ds_d8v9s`` for term variables, and
+``go15_s8G6Q`` for the local recursive function.
 
 From the summary comment above the function signature we can see that
 ``cfoldl'`` on |old| is larger (272 terms) compared to |new| (215 terms). Now
 larger Core *is not always* worse than smaller Core; it depends on
-specialization and inlining behavior. In this case, the larger Core is a better
-performing program. On |old| we can see that the local function ``go15`` begins
-pattern matching on an :term:`Algebraic Data Type`.
+specialization and inlining behavior.
+
+In this case, the larger Core is a better performing program. On |old| we can
+see that the local function ``go15_s8G6Q`` begins pattern matching on an
+:term:`Algebraic Data Type` bound to ``ds4_a8iQC``, which is a ``Data.Map``.
+Once the map is scrutinized ``go15_s8G6Q`` is called again with the argument
+``z'_a8iQB``. The result of the first recursive call is scrutinized by a
+``__DEFAULT`` branch that in turn scrutinizes ``ipv2_a8iQH``. However, on |new|
+the result of the recursive call in a case expression which scrutinizes
+``(umElemRDPair @c_a2svV ipv2_i2wnV)`` *and* allocates a ``Maybe``. So it seems
+that the culprit is ``unElemRDPair`` is no longer being inlined and because it
+is no longer being inlined the case-of-known-constructors optimization is not
+firing.
+
+This is the source of the regression for ``size``. The fix is simple, just
+inline ``umElemRDPair``. In fact, there are six functions in
+``Cardano.Ledger.UMap`` which would benefit from inlining. First here is the
+source for ``umElemRDPair``:
+
+.. code-block:: haskell
+
+   -- | Extract the reward-deposit pair if it is present.
+   -- We can tell that the reward is present when Txxxx has an F in the first position
+   --
+   -- This is equivalent to the pattern (ElemP (SJust r) _ _ _) -> Just r
+   umElemRDPair :: UMElem c -> Maybe RDPair
+   umElemRDPair = \case
+     TFEEE r -> Just r
+     TFEEF r _ -> Just r
+     TFEFE r _ -> Just r
+     TFEFF r _ _ -> Just r
+     TFFEE r _ -> Just r
+     TFFEF r _ _ -> Just r
+     TFFFE r _ _ -> Just r
+     TFFFF r _ _ _ -> Just r
+     _ -> Nothing
+
+We can see that this function is very simple, it takes a ``UMElem c``, pattern
+matches and converts the first field to a ``Maybe``. This function benefits from
+inlining because its rather large, so GHC might not conclude that it should be
+inlined, but also because its simple. It just srutinizes its input with a case
+expression and returns a ``Just``. Such simple functions are prime candidates
+for inlining because they allow other optimizations to fire. Here is another
+such function in the same module:
+
+.. code-block:: haskell
+
+   -- | A n-Tuple view of the `UMElem`.
+   -- We can view all of the constructors as an `UMElem`.
+   umElemAsTuple ::
+     UMElem c ->
+     (StrictMaybe RDPair, Set Ptr, StrictMaybe (KeyHash 'StakePool c), StrictMaybe (DRep c))
+   umElemAsTuple = \case
+     TEEEE -> (SNothing, Set.empty, SNothing, SNothing)
+     TEEEF v -> (SNothing, Set.empty, SNothing, SJust v)
+     TEEFE s -> (SNothing, Set.empty, SJust s, SNothing)
+     TEEFF s v -> (SNothing, Set.empty, SJust s, SJust v)
+     TEFEE p -> (SNothing, p, SNothing, SNothing)
+     TEFEF p v -> (SNothing, p, SNothing, SJust v)
+     TEFFE p s -> (SNothing, p, SJust s, SNothing)
+     TEFFF p s v -> (SNothing, p, SJust s, SJust v)
+     TFEEE r -> (SJust r, Set.empty, SNothing, SNothing)
+     TFEEF r v -> (SJust r, Set.empty, SNothing, SJust v)
+     TFEFE r s -> (SJust r, Set.empty, SJust s, SNothing)
+     TFEFF r s v -> (SJust r, Set.empty, SJust s, SJust v)
+     TFFEE r p -> (SJust r, p, SNothing, SNothing)
+     TFFEF r p v -> (SJust r, p, SNothing, SJust v)
+     TFFFE r p s -> (SJust r, p, SJust s, SNothing)
+     TFFFF r p s v -> (SJust r, p, SJust s, SJust v)
+
+We can see that this function is similar and still just as simple. Its likely
+too large for GHC to conclude to inline it itself, but all the function does is
+scrutinize the input and return a triple; just like ``umElemRDPair``. Thus this
+function is another prime candidate for inlining.
+
+Understanding the Cardano.Ledger.Address.updateStakeDistribution Regression
+---------------------------------------------------------------------------
