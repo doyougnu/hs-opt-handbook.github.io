@@ -24,6 +24,9 @@ The rest of the chapter is structured as follows. We introduce evidence of the
 performance regression. From this information we choose candidates to inspect as
 leads in our investigation. TODO :math:`\ldots{}`
 
+The Process
+-----------
+
 
 Evidence of a Regression
 ------------------------
@@ -102,7 +105,8 @@ Here is the Core output on |new|:
    See :ref:`Unfoldings <Reading Core>` in the Reading Core chapter. For our
    purposes, unless stated otherwise all Core will be generated with
    ``-ddump-simpl`` and no suppression flags. This is purposefully done to show
-   what Core in a real project can look like.
+   what Core in a real project can look like and to help train your eye to make
+   sense of the noisy output.
 
 
 On |old| the Core is slightly different:
@@ -316,3 +320,374 @@ function is another prime candidate for inlining.
 
 Understanding the Cardano.Ledger.Address.updateStakeDistribution Regression
 ---------------------------------------------------------------------------
+
+The regression is directly observable from the Core summary output that GHC
+produces at the top of each Core file. Here is the Core summary on |new|:
+
+.. code-block:: haskell
+
+   ==================== Tidy Core ====================
+   2023-08-09 17:58:04.217192572 UTC
+
+   Result size of Tidy Core
+     = {terms: 59,840,
+        types: 65,769,
+        coercions: 31,464,
+        joins: 135/1,454}
+   ...
+
+while on |old| we have:
+
+.. code-block:: haskell
+
+   ==================== Tidy Core ====================
+   2023-08-08 22:45:09.679031824 UTC
+
+   Result size of Tidy Core
+     = {terms: 10,681,
+        types: 18,069,
+        coercions: 7,591,
+        joins: 22/273}
+   ...
+
+Notice the 6-fold increase in terms on |new| along with concomitant increases in
+types, coercions, and join points. Now let's find where the code bloat is
+occurring by inspecting the Core of ``updateStakeDistribution``.
+
+|new|:
+
+.. code-block:: haskell
+
+   updateStakeDistribution
+     = \ (@era_a4IOQ)
+         ($dEraTxOut_a4IOR :: EraTxOut era_a4IOQ)
+         (pp_a4IkS :: PParams era_a4IOQ)
+         (incStake0_a4IkT :: IncrementalStake (EraCrypto era_a4IOQ))
+         (utxoDel_a4IkU :: UTxO era_a4IOQ)
+         (utxoAdd_a4IkV :: UTxO era_a4IOQ) ->
+         case incStake0_a4IkT of { IStake ww1_s4KkP ww2_s4KkQ ->
+         case Cardano.Ledger.Shelley.LedgerState.IncrementalStake.$wincrementalAggregateUtxoCoinByCredential
+                @era_a4IOQ $dEraTxOut_a4IOR pp_a4IkS (id @Coin) utxoAdd_a4IkV ww1_s4KkP ww2_s4KkQ
+         of
+         { (# ww4_s4KpB, ww5_s4KpC #) ->
+         case Cardano.Ledger.Shelley.LedgerState.IncrementalStake.$wincrementalAggregateUtxoCoinByCredential
+                @era_a4IOQ $dEraTxOut_a4IOR pp_a4IkS
+                (GHC.Num.Integer.integerNegate
+                 `cast` (Sym (Cardano.Ledger.Coin.N:Coin[0])
+                 % <'Many>_N ->_R Sym (Cardano.Ledger.Coin.N:Coin[0])
+                         :: (Integer -> Integer) ~R# (Coin -> Coin)))
+                utxoDel_a4IkU ww4_s4KpB ww5_s4KpC
+         of
+         { (# ww7_X4, ww8_X5 #) ->
+         Cardano.Ledger.Shelley.LedgerState.Types.IStake
+           @(EraCrypto era_a4IOQ) ww7_X4 ww8_X5
+         }}}
+
+while on |old| we have:
+
+.. code-block:: haskell
+
+
+   updateStakeDistribution
+     = \ (@ era_atqca)
+         ($dEraTxOut_atqcc :: EraTxOut era_atqca)
+         (pp_atppw :: PParams era_atqca)
+         (incStake0_atppx :: IncrementalStake (EraCrypto era_atqca))
+         (utxoDel_atppy :: UTxO era_atqca)
+         (utxoAdd_atppz :: UTxO era_atqca) ->
+         case incStake0_atppx of { IStake ww1_sxkut ww2_sxkuu ->
+         case Cardano.Ledger.Shelley.LedgerState.IncrementalStake.$wincrementalAggregateUtxoCoinByCredential
+                @ era_atqca
+                $dEraTxOut_atqcc
+                pp_atppw
+                (id @ Coin)
+                utxoAdd_atppz
+                ww1_sxkut
+                ww2_sxkuu
+         of
+         { (# ww4_sxkuY, ww5_sxkuZ #) ->
+         case Cardano.Ledger.Shelley.LedgerState.IncrementalStake.$wincrementalAggregateUtxoCoinByCredential
+                @ era_atqca $dEraTxOut_atqcc pp_atppw
+                (integer-gmp-1.0.3.0:GHC.Integer.Type.negateInteger
+                 `cast` (Sym (Cardano.Ledger.Coin.N:Coin[0])
+                         ->_R Sym (Cardano.Ledger.Coin.N:Coin[0])
+                         :: (Integer -> Integer) ~R# (Coin -> Coin)))
+                utxoDel_atppy ww4_sxkuY ww5_sxkuZ
+         of
+         { (# ww7_XxkBY, ww8_XxkC0 #) ->
+         Cardano.Ledger.Shelley.LedgerState.Types.IStake
+           @ (EraCrypto era_atqca) ww7_XxkBY ww8_XxkC0
+         }}}
+
+The Core is essentially identical between compiler versions;
+``GHC.Num.Integer.integerNegate`` and
+``integer-gmp-1.0.3.0:GHC.Integer.Type.negateInteger`` differ because of the
+``ghc-bignum`` changes between |old| and |new|, but they will compile to the
+same primops. Therefore, the regression must occur in a function called by
+``updateStakeDistribution``; of which we have only one candidate: the worker for
+``incrementalAggregateUtxoCoinByCredential``. First here is the source code for
+this function:
+
+.. code-block:: haskell
+
+   incrementalAggregateUtxoCoinByCredential ::
+     forall era.
+     EraTxOut era =>
+     PParams era ->
+     (Coin -> Coin) ->
+     UTxO era ->
+     IncrementalStake (EraCrypto era) ->
+     IncrementalStake (EraCrypto era)
+   incrementalAggregateUtxoCoinByCredential pp mode (UTxO u) initial =
+     Map.foldl' accum initial u
+     where
+       keepOrDelete new Nothing =
+         case mode new of
+           Coin 0 -> Nothing
+           final -> Just final
+       keepOrDelete new (Just old) =
+         case mode new <> old of
+           Coin 0 -> Nothing
+           final -> Just final
+       ignorePtrs = HardForks.forgoPointerAddressResolution (pp ^. ppProtocolVersionL)
+       accum ans@(IStake stake ptrs) out =
+         let c = out ^. coinTxOutL
+          in case out ^. addrTxOutL of
+               Addr _ _ (StakeRefPtr p) ->
+                 if ignorePtrs
+                   then ans
+                   else IStake stake (Map.alter (keepOrDelete c) p ptrs)
+               Addr _ _ (StakeRefBase hk) -> IStake (Map.alter (keepOrDelete c) hk stake) ptrs
+               _other -> ans
+
+The Core for this function is too large to show but does not differ between
+compiler versions, we can quickly spotcheck for differences by checking the
+Core summary for the worker of ``incrementalAggregateUtxoCoinByCredential``:
+
+|new|:
+
+.. code-block:: haskell
+
+   -- RHS size: {terms: 154, types: 238, coercions: 122, joins: 0/7}
+   Cardano.Ledger.Shelley.LedgerState.IncrementalStake.$wincrementalAggregateUtxoCoinByCredential [InlPrag=[2]]
+     :: forall {era}.
+        EraTxOut era =>
+        PParams era
+        -> (Coin -> Coin)
+        -> UTxO era
+        -> Map (Credential 'Staking (EraCrypto era)) Coin
+        -> Map Cardano.Ledger.Credential.Ptr Coin
+        -> (# Map (Credential 'Staking (EraCrypto era)) Coin,
+              Map Cardano.Ledger.Credential.Ptr Coin #)
+   [GblId,
+    Arity=6,
+    Str=...,
+    Unf=OtherCon []]
+   Cardano.Ledger.Shelley.LedgerState.IncrementalStake.$wincrementalAggregateUtxoCoinByCredential
+
+|old|:
+
+.. code-block:: haskell
+
+   -- RHS size: {terms: 154, types: 241, coercions: 126, joins: 0/7}
+   Cardano.Ledger.Shelley.LedgerState.IncrementalStake.$wincrementalAggregateUtxoCoinByCredential [InlPrag=NOUSERINLINE[2]]
+     :: forall era.
+        EraTxOut era =>
+        PParams era
+        -> (Coin -> Coin)
+        -> UTxO era
+        -> Map (Credential 'Staking (EraCrypto era)) Coin
+        -> Map Cardano.Ledger.Credential.Ptr Coin
+        -> (# Map (Credential 'Staking (EraCrypto era)) Coin,
+              Map Cardano.Ledger.Credential.Ptr Coin #)
+   [GblId,
+    Arity=6,
+    Str=...,
+    Unf=OtherCon []]
+   Cardano.Ledger.Shelley.LedgerState.IncrementalStake.$wincrementalAggregateUtxoCoinByCredential
+
+Notice that the terms are identical, there are slightly less types on |new|, and
+more coercions on |old|. So again the difference must be in function that
+``incrementalAggregateUtxoCoinByCredential`` calls. We have the following candidates:
+
+#. ``coinTxOutL``
+#. ``HardForks.forgoPointerAddressResolution``
+#. ``ppProtocolVersionL``
+#. ``pp``
+#. ``Map.alter``
+#. ``addrTxOutL``
+
+Of those there are only two functions that were not inlined. An easy way to tell
+is simply to search for the function name in the Core of
+``incrementalAggregateUtxoCoinByCredential``; if a function was inlined *and*
+regressed then we should see a signal in the terms field of the Core summary.
+Thus our only candidates are ``Map.alter`` and ``addrTxOutL``.
+
+``Map.alter`` is a function imported from ``Data.Map.Strict``, so as a first
+sanity check we'll make sure that the same version of the ``containers`` library
+was used. Fortunately, the ``cardano-ledger`` code base uses `nix
+<https://nixos.org/>`_ precisely specify dependencies for ``cardano-ledger``.
+This means we can simply ask cabal to list the installed packages and observe
+any difference in versions.
+
+Here is the environment for |new|:
+
+.. code-block:: console
+
+   $ nix develop .#ghc927
+   [nix-shell:~/cardano-ledger]$ cabal list --installed | awk -v RS='' '/* containers/'
+   * containers
+       Synopsis: Assorted concrete container types
+       Default available version: 0.6.7
+       Installed versions: 0.6.5.1
+       License:  BSD3
+
+while on |old| we have:
+
+.. code-block:: console
+
+   $ nix develop .#ghc8107
+   [nix-shell:~/cardano-ledger]$ cabal list --installed | awk -v RS='' '/* containers/'
+   * containers
+       Synopsis: Assorted concrete container types
+       Default available version: 0.6.7
+       Installed versions: 0.6.5.1
+       License:  BSD3
+
+which leaves only ``addrTxOutL``. Again, using the Core summary as a spot check
+we find a significant difference:
+
+|new|:
+
+.. code-block:: haskell
+
+   -- RHS size: {terms: 1,058,
+                 types: 1,043,
+                 coercions: 541,
+                 joins: 15/25}
+   Cardano.Ledger.Core.$dmaddrTxOutL [InlPrag=INLINE (sat-args=0)]
+
+|old|:
+
+.. code-block:: haskell
+
+   -- RHS size: {terms: 658,
+                 types: 1,028,
+                 coercions: 503,
+                 joins: 4/17}
+   Cardano.Ledger.Core.$dmaddrTxOutL [InlPrag=INLINE (sat-args=0)]
+
+Notice that |new| is almost twice the size of |old|. Note also that
+``addrTxOutL`` is prefixed with ``$dm``. :ref:`As you'll recall <Reading Core>`.
+``$`` generally means the name comes from a type class dictionary ("generally"
+because on can get ``$wfoo`` through the :ref:`Worker/Wrapper <Worker/Wrapper>`
+optimization), while ``dm`` means that this function is a *default method* of a
+type class.
+
+Let's check the source, ``addrTxOutL`` belongs to a large type class called
+``EraTxOut`` located in ``Cardano.Ledger.Core``:
+
+.. code-block:: haskell
+
+   -- | Abstract interface into specific fields of a `TxOut`
+   class
+     ( Val (Value era)
+     , ToJSON (TxOut era)
+     , DecCBOR (Value era)
+     , DecCBOR (CompactForm (Value era))
+     , EncCBOR (Value era)
+     , ToCBOR (TxOut era)
+     , FromCBOR (TxOut era)
+     , EncCBOR (TxOut era)
+     , DecCBOR (TxOut era)
+     , DecShareCBOR (TxOut era)
+     , Share (TxOut era) ~ Interns (Credential 'Staking (EraCrypto era))
+     , NoThunks (TxOut era)
+     , NFData (TxOut era)
+     , Show (TxOut era)
+     , Eq (TxOut era)
+     , EraPParams era
+     ) =>
+     EraTxOut era
+     where
+     -- | The output of a UTxO for a particular era
+     type TxOut era = (r :: Type) | r -> era
+
+     ...
+
+    addrTxOutL :: Lens' (TxOut era) (Addr (EraCrypto era))
+    addrTxOutL =
+      lens
+        ( \txOut -> case txOut ^. addrEitherTxOutL of
+            Left addr -> addr
+            Right cAddr -> decompactAddr cAddr
+        )
+        (\txOut addr -> txOut & addrEitherTxOutL .~ Left addr)
+    {-# INLINE addrTxOutL #-}
+
+The type class is highly polymorphic with 16 type class constraints.
+``addrTxOutL`` is a lens which calls ``addrEitherTxOutL`` and ``decompactAddr``.
+Let's check those functions.
+
+|new|:
+
+.. code-block:: haskell
+
+   -- RHS size: {terms: 6, types: 129, coercions: 0, joins: 0/0}
+   addrEitherTxOutL
+     :: forall era.
+        EraTxOut era =>
+        Lens'
+          (TxOut era)
+          (Either (Addr (EraCrypto era)) (CompactAddr (EraCrypto era)))
+   [GblId[ClassOp],
+    Arity=1,
+    Caf=NoCafRefs,
+    Str=<SP(A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,SL,A,A)>,
+    RULES: Built in rule for addrEitherTxOutL: "Class op addrEitherTxOutL"]
+   addrEitherTxOutL
+     = \ (@era_a1TXN) (v_B1 :: EraTxOut era_a1TXN) ->
+         case v_B1 of v_B1
+         { Cardano.Ledger.Core.C:EraTxOut v_B2 v_B3 v_B4 v_B5 v_B6 v_B7 v_B8
+                                          v_B9 v_Ba v_Bb v_Bc v_Bd v_Be v_Bf v_Bg v_Bh v_Bi v_Bj v_Bk
+                                          v_Bl v_Bm v_Bn v_Bo v_Bp v_Bq v_Br ->
+         v_Bp
+         }
+
+|old|:
+
+.. code-block:: haskell
+
+   -- RHS size: {terms: 6, types: 130, coercions: 0, joins: 0/0}
+   addrEitherTxOutL
+     :: forall era.
+        EraTxOut era =>
+        Lens'
+          (TxOut era)
+          (Either (Addr (EraCrypto era)) (CompactAddr (EraCrypto era)))
+   [GblId[ClassOp],
+    Arity=1,
+    Caf=NoCafRefs,
+    Str=<S(LLLLLLLLLLLLLLLLLLLLLLLSLL),U(A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,U,A,A)>,
+    RULES: Built in rule for addrEitherTxOutL: "Class op addrEitherTxOutL"]
+   addrEitherTxOutL
+     = \ (@ era_a3NLT) (v_B1 :: EraTxOut era_a3NLT) ->
+         case v_B1 of v_B1
+         { Cardano.Ledger.Core.C:EraTxOut v_B2 v_B3 v_B4 v_B5 v_B6 v_B7 v_B8
+                                          v_B9 v_Ba v_Bb v_Bc v_Bd v_Be v_Bf v_Bg v_Bh v_Bi v_Bj v_Bk
+                                          v_Bl v_Bm v_Bn v_Bo v_Bp v_Bq v_Br ->
+         v_Bp
+         }
+
+
+
+
+
+
+
+
+..
+   Notice that the function is polymorphic in ``EraTxOut``.
+   This type class gives
+   access to ``addrTxOutL`` which is used in a lens in this line: ``in case out ^.
+   addrTxOutL``.
