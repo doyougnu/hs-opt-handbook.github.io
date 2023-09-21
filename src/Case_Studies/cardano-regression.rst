@@ -101,12 +101,15 @@ Here is the Core output on |new|:
 
    I've elided the :term:`Unfolding` for ``size`` and only present the
    ``IdInfo`` for the term. Unfoldings are important to inspect and understand,
-   but for our purposes the unfoldings are simply copies of the function body.
-   See :ref:`Unfoldings <Reading Core>` in the Reading Core chapter. For our
-   purposes, unless stated otherwise all Core will be generated with
-   ``-ddump-simpl`` and no suppression flags. This is purposefully done to show
-   what Core in a real project can look like and to help train your eye to make
-   sense of the noisy output.
+   but for our purposes the unfoldings will generally be copies of the function
+   body. See :ref:`Unfoldings <Reading Core>` in the Reading Core chapter for
+   more. Similarly, I will selectively replace the strictness analysis output
+   with an ellipses because it is typically too large to format well.
+
+   Unless stated otherwise all Core will be generated with ``-ddump-simpl`` and
+   no suppression flags. This is purposefully done to show what Core in a real
+   project can look like and to help train your eye to make sense of the noisy
+   output.
 
 
 On |old| the Core is slightly different:
@@ -679,6 +682,221 @@ Let's check those functions.
          v_Bp
          }
 
+No difference, also the Core is fairly well formed. Good job lens! This leaves
+only ``addrTxOutL``:
+
+|new|:
+
+.. code-block:: haskell
+
+
+   -- RHS size: {terms: 1,058,
+                 types: 1,043,
+                 coercions: 541,
+                 joins: 15/25}
+   Cardano.Ledger.Core.$dmaddrTxOutL [InlPrag=INLINE (sat-args=0)]
+     :: forall era.
+        EraTxOut era =>
+        Lens' (TxOut era) (Addr (EraCrypto era))
+   [GblId,
+    Arity=1,
+    Str=...,
+    Unf=Unf{Src=Compulsory, TopLvl=True, Value=True, ConLike=True,
+            WorkFree=True, Expandable=True,
+            Guidance=ALWAYS_IF(arity=0,unsat_ok=True,boring_ok=True)
+            Tmpl= \ (@era_a1TXN) ($dEraTxOut_a1ZWu :: EraTxOut era_a1TXN) ->
+                    let {
+   ...
+   Cardano.Ledger.Core.$dmaddrTxOutL
+     = \ (@era_a1TXN) ($dEraTxOut_a1ZWu :: EraTxOut era_a1TXN) ->
+         let {
+
+|old|:
+
+.. code-block:: haskell
+
+   -- RHS size: {terms: 658,
+                 types: 1,028,
+                 coercions: 503,
+                 joins: 4/17}
+   Cardano.Ledger.Core.$dmaddrTxOutL [InlPrag=INLINE (sat-args=0)]
+     :: forall era.
+        EraTxOut era =>
+        Lens' (TxOut era) (Addr (EraCrypto era))
+   [GblId,
+    Arity=2,
+    Str=...,
+    Unf=Unf{Src=InlineStable, TopLvl=True, Value=True, ConLike=True,
+            WorkFree=True, Expandable=True,
+            Guidance=ALWAYS_IF(arity=0,unsat_ok=True,boring_ok=True)
+            Tmpl= \ (@ era_a3NLT) ($dEraTxOut_a3Xnj :: EraTxOut era_a3NLT) ->
+                    let {
+                      $dEraPParams_a3YKj [Occ=OnceL1] :: EraPParams era_a3NLT
+   ...
+   Cardano.Ledger.Core.$dmaddrTxOutL
+     = \ (@ era_a3NLT) ($dEraTxOut_a3Xnj :: EraTxOut era_a3NLT) (@ (f_a3XoX :: * -> *))
+         (eta_B1 :: Functor f_a3XoX) ->
+         let {
+
+The Core summary shows a blow up of exactly 400 more terms on |new| (1,058)
+compared to |old| (658). Note that I am showing a bit of the unfoldings (the
+``Unf`` record, and specifically the ``Tmpl=`` field) for reasons that will soon
+be apparent.
+
+There are several interesting differences in these versions. First, from the
+meta information we can see that the ``Arity`` changes. On |new|
+``$dmaddrTxOutL`` has an ``Arity`` of 1, while on |old| it has an ``Arity``
+of 2. But that is just the unfolding, the optimized version on |old| shows three
+arguments: 2 type arguments, ``era_a3NLT`` and ``f_a3XoX :: * -> *``; and one
+type class dictionary ``$dEraTxOut_a3Xnj``. However, on |new| the optimized
+version still only has two arguments: ``era_a1TXN`` and ``dEraTxOut_a1ZWu``.
+Furthermore, notice that the extra argument on |old| is called ``eta_B1``, this
+argument comes from the eta expansion optimization. Lastly, the ``Src`` field
+has changed, in |old| we have ``Src=InlineStable`` while on |new| its
+``Src=Compulsory``. In practice, these should be basically the same thing.
+``Compulsory`` is used for GHC generated names and means that the function will
+be inlined at every call site [#]_, whereas ``InlineStable`` means the function
+is a wrapper or system-generated unfolding.
+
+The rest of the Core is large, so I will just highlight the relevant parts. Our
+first tactic is to step through the Core to observe the difference between the
+two versions. We'll begin with the unfoldings for each version. This is a sanity
+check, unfoldings are very close to the raw right-hand side of a function
+definition and so we should expect these to be essentially identical.
+Furthermore, because ``addrTxOutL`` is marked as ``INLINE`` the unfolding is the
+Core that will be inlined into each call site.
+
+Unfortunately this is not the case for this function. Recall that this function
+creates a lens and pattern matches on an ``Either`` with a case expression; here
+is that case expression in the unfolding:
+
+|new|:
+
+.. code-block:: haskell
+
+   Cardano.Ledger.Core.$dmaddrTxOutL [InlPrag=INLINABLE]
+     :: forall era. EraTxOut era => Lens' (TxOut era) (Addr (EraCrypto era))
+   [GblId,
+    Arity=1,
+    Str=...,
+    Unf=Unf{Src=Compulsory, TopLvl=True, Value=True, ConLike=True,
+            WorkFree=True, Expandable=True,
+            Guidance=ALWAYS_IF(arity=0,unsat_ok=True,boring_ok=True)
+            Tmpl= \ (@era_afw7) ($dEraTxOut_apRS :: EraTxOut era_afw7) ->
+   ...
+   lens
+   @(TxOut era_afw7)
+   @(Addr (EraCrypto era_afw7))
+   @(Addr (EraCrypto era_afw7))
+   @(TxOut era_afw7)
+   (\ (txOut_afwj [Occ=Once1] :: TxOut era_afw7) ->
+        case (addrEitherTxOutL
+                @era_afw7
+                $dEraTxOut_apRS
+                ...
+        of {
+            Left addr_afwk [Occ=Once1] -> addr_afwk;
+            Right cAddr_afwl ->
+            let {
+                $dIsString1_isdy [Occ=OnceL1] :: String -> [Char]
+                [LclId, Arity=1, Unf=OtherCon []]
+                $dIsString1_isdy
+                = \ (eta1_isdz [Occ=Once1] :: String) -> eta1_isdz } in
+            let {
+                $dMonadFail1_isdA
+                :: MonadFail
+                        (Control.Monad.Trans.Fail.FailT
+                        [Char] Data.Functor.Identity.Identity)
+                [LclId]
+                $dMonadFail1_isdA
+                = Control.Monad.Trans.Fail.$fMonadFailFailT
+                    @[Char]
+                    @Data.Functor.Identity.Identity
+                    ($dIsString1_isdy
+                        `cast` (Sym (Data.String.N:IsString[0]) <[Char]>_N
+                                :: (String -> [Char]) ~R# Data.String.IsString [Char]))
+                    Data.Functor.Identity.$fMonadIdentity } in
+            let {
+                header_ise0 :: GHC.Word.Word8
+                [LclId]
+                header_ise0
+                = cardano-prelude-0.1.0.2-DWhOQlInrHGJKMWDMqUhtQ:Cardano.Prelude.Compat.ByteString.Short.unsafeShortByteStringIndex
+                    (cAddr_afwl
+                        `cast` (Cardano.Ledger.Address.N:CompactAddr[0]
+                                    <EraCrypto era_afw7>_P
+                                :: CompactAddr (EraCrypto era_afw7)
+                                ~R# Data.ByteString.Short.Internal.ShortByteString))
+                    (ghc-prim:GHC.Types.I# 0#) } in
+            let {
+                s2_ise1 :: Int
+                [LclId, Unf=OtherCon []]
+                s2_ise1 = ghc-prim:GHC.Types.I# 0# } in
+            case cAddr_afwl
+                    `cast` (Cardano.Ledger.Address.N:CompactAddr[0]
+                                <EraCrypto era_afw7>_P
+                            :: CompactAddr (EraCrypto era_afw7)
+                            ~R# Data.ByteString.Short.Internal.ShortByteString)
+            of wild1_ise2
+            { Data.ByteString.Short.Internal.SBS ba#_ise5 ->
+            join {
+
+Notice the ``Right`` branch has four ``let`` expressions, two for type class
+dictionaries: ``$dIsString1_isdy`` and ``$dMonadFail1_isdA`` and two values: a
+``Word8`` value called ``header_ise0`` and an ``Int`` called ``s2_ise1``.
+
+|old|:
+
+.. code-block:: haskell
+
+   Cardano.Ledger.Core.$dmaddrTxOutL [InlPrag=INLINE (sat-args=0)]
+   :: forall era. EraTxOut era => Lens' (TxOut era) (Addr (EraCrypto era))
+   [GblId,
+   Arity=2,
+   Str=...,
+   Unf=Unf{Src=InlineStable, TopLvl=True, Value=True, ConLike=True,
+           WorkFree=True, Expandable=True,
+            Guidance=ALWAYS_IF(arity=0,unsat_ok=True,boring_ok=True)
+            Tmpl= \ (@ era_a3NLT) ($dEraTxOut_a3Xnj :: EraTxOut era_a3NLT) ->
+    ...
+    lens
+        @ (TxOut era_a3NLT)
+        @ (Addr (EraCrypto era_a3NLT))
+        @ (Addr (EraCrypto era_a3NLT))
+        @ (TxOut era_a3NLT)
+        (\ (txOut_a3NM5 [Occ=Once1] :: TxOut era_a3NLT) ->
+        case (addrEitherTxOutL
+                @ era_a3NLT
+                $dEraTxOut_a3Xnj
+
+        of {
+            Left addr_a3NM6 [Occ=Once1] -> addr_a3NM6;
+            Right cAddr_a3NM7 ->
+            let {
+                header_sJVD :: GHC.Word.Word8
+                [LclId]
+                header_sJVD
+                = Data.ByteString.Short.Internal.index
+                    (cAddr_a3NM7
+                        `cast` (Cardano.Ledger.Address.N:CompactAddr[0]
+                                    <EraCrypto era_a3NLT>_P
+                                :: CompactAddr (EraCrypto era_a3NLT)
+                                ~R# Data.ByteString.Short.Internal.ShortByteString))
+                    (ghc-prim-0.6.1:GHC.Types.I# 0#) } in
+            let {
+                s2_aIzM :: Int
+                [LclId, Unf=OtherCon []]
+                s2_aIzM = ghc-prim-0.6.1:GHC.Types.I# 0# } in
+                case cAddr_a3NM7
+                        `cast` (Cardano.Ledger.Address.N:CompactAddr[0]
+                                    <EraCrypto era_a3NLT>_P
+                                :: CompactAddr (EraCrypto era_a3NLT)
+                                ~R# Data.ByteString.Short.Internal.ShortByteString)
+                of
+                { Data.ByteString.Short.Internal.SBS barr#_iFrL ->
+                join {...
+
+On |old| the ``Right`` branch is smaller, instead of four let expressions we
+only have two, and the only two are values not type class dictionaries.
 
 
 
@@ -691,3 +909,6 @@ Let's check those functions.
    This type class gives
    access to ``addrTxOutL`` which is used in a lens in this line: ``in case out ^.
    addrTxOutL``.
+
+.. [#] As stated by ``Note [INLINE and default methods]`` in GHC source.
+       Default methods are a special case that are always ``Compulsory``.
