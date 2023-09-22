@@ -325,7 +325,8 @@ Understanding the Cardano.Ledger.Address.updateStakeDistribution Regression
 ---------------------------------------------------------------------------
 
 The regression is directly observable from the Core summary output that GHC
-produces at the top of each Core file. Here is the Core summary on |new|:
+produces at the top of each Core file. Here is the Core summary on |new| for
+``Cardano.Ledger.Address`` :
 
 .. code-block:: haskell
 
@@ -583,9 +584,9 @@ we find a significant difference:
 Notice that |new| is almost twice the size of |old|. Note also that
 ``addrTxOutL`` is prefixed with ``$dm``. :ref:`As you'll recall <Reading Core>`.
 ``$`` generally means the name comes from a type class dictionary ("generally"
-because on can get ``$wfoo`` through the :ref:`Worker/Wrapper <Worker/Wrapper>`
-optimization), while ``dm`` means that this function is a *default method* of a
-type class.
+because on can get ``$wfoo`` through the :ref:`Worker/Wrapper <Worker Wrapper
+Chapter>` optimization), while ``dm`` means that this function is a *default
+method* of a type class.
 
 Let's check the source, ``addrTxOutL`` belongs to a large type class called
 ``EraTxOut`` located in ``Cardano.Ledger.Core``:
@@ -738,10 +739,13 @@ only ``addrTxOutL``:
          (eta_B1 :: Functor f_a3XoX) ->
          let {
 
-The Core summary shows a blow up of exactly 400 more terms on |new| (1,058)
+The Core summary shows a blow up of *exactly* 400 more terms on |new| (1,058)
 compared to |old| (658). Note that I am showing a bit of the unfoldings (the
 ``Unf`` record, and specifically the ``Tmpl=`` field) for reasons that will soon
-be apparent.
+be apparent. That the increase in terms is so regular is peculiar. It suggests
+that we have some name that is 100 terms or so and it is being inlined 4 times.
+This is a clue, we should pay special attention to ``INLINE`` pragmas and
+unfoldings.
 
 There are several interesting differences in these versions. First, from the
 meta information we can see that the ``Arity`` changes. On |new|
@@ -793,7 +797,7 @@ is that case expression in the unfolding:
         case (addrEitherTxOutL
                 @era_afw7
                 $dEraTxOut_apRS
-                ...
+        ...
         of {
             Left addr_afwk [Occ=Once1] -> addr_afwk;
             Right cAddr_afwl ->
@@ -867,7 +871,7 @@ dictionaries: ``$dIsString1_isdy`` and ``$dMonadFail1_isdA`` and two values: a
         case (addrEitherTxOutL
                 @ era_a3NLT
                 $dEraTxOut_a3Xnj
-
+        ...
         of {
             Left addr_a3NM6 [Occ=Once1] -> addr_a3NM6;
             Right cAddr_a3NM7 ->
@@ -896,7 +900,379 @@ dictionaries: ``$dIsString1_isdy`` and ``$dMonadFail1_isdA`` and two values: a
                 join {...
 
 On |old| the ``Right`` branch is smaller, instead of four let expressions we
-only have two, and the only two are values not type class dictionaries.
+only have two, and the only two are values not type class dictionaries. This
+means that the function ``Cardano.Ledger.decompactAddr`` has regressed because
+this function constitutes the ``Right`` branch.
+
+The extra ``let`` will increase allocations for this branch so they likely
+contribute to the regression. The larger problem is that we would expect these
+dictionaries to inline and thereby enabling more optimizations, such as floating
+the ``let`` out of the branch.
+
+Let's continue diving into the Core. We'll pay special attention to the type
+class dictionaries because these ``lets`` are evidence that something is amiss
+with the polymorphism of ``decompactAddr``.
+
+Here is a meaningful difference. Note that this Core is firmly in the body of
+``decompactAddr`` :
+
+|new|:
+
+.. code-block:: haskell
+
+   ...
+   case ghc-prim:GHC.Classes.geInt
+       karg2_iseK
+       (ghc-prim:GHC.Types.I# 0#)
+   of {
+   False ->
+       jump $j_ise3
+       (GHC.Base.build
+           @[Char]
+           (\ (@a6_isg9)
+               (c1_isga [Occ=Once1!,
+                       OS=OneShot]
+               :: [Char]
+                   -> a6_isg9
+                   -> a6_isg9)
+               (n_isgb [Occ=Once1,
+                       OS=OneShot]
+               :: a6_isg9) ->
+               c1_isga
+               (GHC.Base.build
+                   @Char
+                   (\ (@b_isgc) ->
+                       ghc-prim:GHC.CString.unpackFoldrCString#
+                       @b_isgc
+                       "Impossible: Negative offset"#))
+               n_isgb));
+   True ->
+       case (((Cardano.Ledger.Address.failDecoding
+               @(Control.Monad.Trans.State.Lazy.StateT
+                   Int
+                   (Control.Monad.Trans.Fail.FailT
+                       [Char]
+                       Data.Functor.Identity.Identity))
+               @(Hash.Hash
+                   (CC.ADDRHASH
+                       (EraCrypto
+                           era_afw7))
+                   (Cardano.Crypto.DSIGN.Class.VerKeyDSIGN
+                       (CC.DSIGN
+                           (EraCrypto
+                           era_afw7))))
+               (Control.Monad.Trans.State.Lazy.$fMonadFailStateT
+                   @(Control.Monad.Trans.Fail.FailT
+                       [Char]
+                       Data.Functor.Identity.Identity)
+                   @Int
+                   $dMonadFail1_isdA)
+                    (GHC.Base.build
+                        @Char
+                        (\ (@b_isgl) ->
+                            ghc-prim:GHC.CString.unpackFoldrCString#
+                            @b_isgl
+                            "Hash"#))
+
+   ...
+
+We have a case expression comparing two ``Int``: ``ghc-prim:GHC.Classes.geInt
+karg2_iseK (ghc-prim:GHC.Types.I# 0#)`` and then matches on the resulting
+``Bool``. The ``False`` branch is a :term:`join point`; what is interesting
+about this branch is the snippet that is building a ``String``:
+``ghc-prim:GHC.CString.unpackFoldrCString# @b_isgc "Impossible: Negative
+offset"#``. Clearly this is an error branch, but we should expect calls like
+this to become a :term:`CAF` after being floated out to the top level. The
+``True`` branch is not better, it calls ``Cardano.Ledger.Address.failDecoding``
+and does the type applications for that function, which must use monad
+transformer stack. Notably, the ``MonadFail`` dictionary *has not* been inlined,
+this is why this application: ``Control.Monad.Trans.State.Lazy.$fMonadFailStateT
+<type-args> $dMonadFail1_isdA`` exists. Also recall that ``$dMonadFail1_isdA``
+is the name that was allocated in an extra ``let``; from a quick search this
+name is referenced 22 times, thus an optimized version is likely to have a big
+impact.
+
+Here is the same section of Core on |old|:
+
+.. code-block:: haskell
+
+   ...
+   case ghc-prim-0.6.1:GHC.Classes.geInt
+           karg2_sYxg
+           (ghc-prim-0.6.1:GHC.Types.I#
+           0#)
+   of {
+   False ->
+       jump $j_sYwR
+       (GHC.Base.build
+           @ [Char]
+           (\ (@ a6_aJZH)
+               (c1_aJZI [Occ=Once1!,
+                       OS=OneShot]
+                   :: [Char]
+                   -> a6_aJZH
+                   -> a6_aJZH)
+               (n_aJZJ [Occ=Once1,
+                       OS=OneShot]
+                   :: a6_aJZH) ->
+               c1_aJZI
+               (GHC.Base.build
+                   @ Char
+                   (\ (@ b_iHyc) ->
+                       ghc-prim-0.6.1:GHC.CString.unpackFoldrCString#
+                       @ b_iHyc
+                       "Impossible: Negative offset"#))
+               n_aJZJ));
+   True ->
+       case (((Cardano.Ledger.Address.failDecoding
+               @ (Control.Monad.Trans.State.Lazy.StateT
+                       Int
+                       (Control.Monad.Trans.Fail.FailT
+                       [Char]
+                       Data.Functor.Identity.Identity))
+               @ (Hash.Hash
+                       (CC.ADDRHASH
+                       (EraCrypto
+                           era_a3NLT))
+                       (Cardano.Crypto.DSIGN.Class.VerKeyDSIGN
+                       (CC.DSIGN
+                           (EraCrypto
+                               era_a3NLT))))
+               (Cardano.Ledger.Address.fromCborAddr_$s$fMonadFailStateT
+                   @ Int)
+               (GHC.Base.build
+                   @ Char
+                   (\ (@ b_iHyc) ->
+                       ghc-prim-0.6.1:GHC.CString.unpackFoldrCString#
+                       @ b_iHyc
+                       "Hash"#))
+
+The ``False`` branch is essentially identical, but the ``True`` branch is in a
+much better form. Notice that we still have the same type applications, but now
+instead of a reference to ``dMonadFail1_isdA`` there is a call to a
+*specialized* function:
+``Cardano.Ledger.Address.fromCborAddr_$s$fMonadFailStateT``. From its name we
+can conclude that this function is ``Cardano.Ledger.Address.fromCborAddr`` and
+has been specialized to ``MonadFailStateT`` (also note the ``$s`` indicating
+that it is a GHC generated specialized version).
+
+We have enough data to craft a hypothesis: The lack of specialization of
+``fromCborAddr`` on |new| is a major contributor to Core bloat, which in turn
+causes the performance regression.
+
+The functions we need to inspect are ``Cardano.Ledger.Address.decompactAddr``,
+``Cardano.Ledger.Address.fromCborAddr``, and
+``Cardano.Ledger.Address.failDecoding``. Here is their source:
+
+.. code-block:: haskell
+
+   module Cardano.Ledger.Address (
+     -- * Compact Address
+     ...
+     decompactAddr,
+     ...
+     fromCborAddr,
+     ...)
+
+   decompactAddr :: forall c. (HasCallStack, Crypto c) => CompactAddr c -> Addr c
+   decompactAddr (UnsafeCompactAddr sbs) =
+     case runFail $ evalStateT (decodeAddrStateAllowLeftoverT True sbs) 0 of
+       Right addr -> addr
+       Left err ->
+         error $
+           "Impossible: Malformed CompactAddr was allowed into the system. "
+             ++ " Decoder error: "
+             ++ err
+   {-# INLINE decompactAddr #-}
+
+   fromCborBothAddr :: forall c s. Crypto c => Decoder s (Addr c, CompactAddr c)
+   fromCborBothAddr = do
+     ifDecoderVersionAtLeast (natVersion @7) decodeAddrRigorous fromCborBackwardsBothAddr
+     where
+       decodeAddrRigorous = do
+         sbs <- decCBOR
+         flip evalStateT 0 $ do
+           addr <- decodeAddrStateAllowLeftoverT False sbs
+           pure (addr, UnsafeCompactAddr sbs)
+       {-# INLINE decodeAddrRigorous #-}
+   {-# INLINE fromCborBothAddr #-}
+
+
+   failDecoding :: MonadFail m => String -> String -> m a
+   failDecoding name msg = fail $ "Decoding " ++ name ++ ": " ++ msg
+   {-# NOINLINE failDecoding #-}
+
+Note that ``decompactAddr`` and ``fromCborAddr`` are in the export list of the
+module but ``failDecoding`` is not. Typically GHC will be very good at
+optimizing module local functions such as ``failDecoding``, however
+``failDecoding`` is marked ``NOINLINE`` which interacts with GHC's optimizer
+[#]_. Similarly, ``decompactAddr`` and ``fromCborAddr`` should be marked
+``INLINEABLE`` rather than ``INLINE`` because they are in the export list. This
+will gives GHC the opportunity to specialize these functions *in other modules*,
+rather than marking them as cheap to inline. If we know exactly which types will
+be used (which in this case we do), then we can issue a ``SPECIALIZE`` pragma
+for the same effect and with less load on GHC [#]_.
+
+From ``decompactAddr`` we can see that ``MonadFailStateT`` is likely
+coming from ``decodeAddrStateAllowLeftoverT`` due to ``decompactAddr`` calling
+``runFail`` and ``evalStateT``.
+
+First, we'll remove the ``NOINLINE`` and see if this alters the Core of
+``addrTxOutL`` to be closer to the Core produce by |old|:
+
+.. code-block:: haskell
+
+   -- no NOINLINE pragma now
+   failDecoding :: MonadFail m => String -> String -> m a
+   failDecoding name msg = fail $ "Decoding " ++ name ++ ": " ++ msg
+
+which results in this Core, we'll still be looking at the unfolding because
+``addrTxOutL`` in marked INLINE:
+
+.. code-block:: haskell
+
+   -- RHS size: {terms: 635, types: 635, coercions: 186, joins: 13/21}
+   Cardano.Ledger.Core.$dmaddrTxOutL [InlPrag=INLINE (sat-args=0)]
+     :: forall era.
+        EraTxOut era =>
+        Lens' (TxOut era) (Addr (EraCrypto era))
+   [GblId,
+    Arity=1,
+    Str=<LP(A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,MP(MP(MP(A,MP(L,A,A,A),A,A,A,A,A,A,A),A,A,A,A,A,A,A,A,A,A,A),A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A,A),A,A,A,A,A,A,A,LCL(C1(C1(L))),A,A)>,
+    Unf=Unf{Src=Compulsory, TopLvl=True, Value=True, ConLike=True,
+            WorkFree=True, Expandable=True,
+            Guidance=ALWAYS_IF(arity=0,unsat_ok=True,boring_ok=True)
+            Tmpl= \ (@era_a2bTm) ($dEraTxOut_a2hQj :: EraTxOut era_a2bTm) ->
+    ...
+    lens
+        @(TxOut era_a2bTm)
+        @(Addr (EraCrypto era_a2bTm))
+        @(Addr (EraCrypto era_a2bTm))
+        @(TxOut era_a2bTm)
+        (\ (txOut_a2bTy [Occ=Once1] :: TxOut era_a2bTm) ->
+        case (addrEitherTxOutL
+                @era_a2bTm
+                $dEraTxOut_a2hQj
+        ...
+        of {
+            Left addr_a2bTz [Occ=Once1] -> addr_a2bTz;
+            Right cAddr_a2bTA ->
+            let {
+                header_i2jrF :: GHC.Word.Word8
+                [LclId]
+                header_i2jrF
+                = cardano-prelude-0.1.0.2-Ww24WREo4wCDwR8SsfBcg:Cardano.Prelude.Compat.ByteString.Short.unsafeShortByteStringIndex
+                    (cAddr_a2bTA
+                        `cast` (Cardano.Ledger.Address.N:CompactAddr[0]
+                                    <EraCrypto era_a2bTm>_P
+                                :: CompactAddr (EraCrypto era_a2bTm)
+                                ~R# Data.ByteString.Short.Internal.ShortByteString))
+                    (ghc-prim:GHC.Types.I# 0#) } in
+            case cAddr_a2bTA
+            ...
+
+            case ghc-prim:GHC.Classes.geInt
+                    ww_i2jsu (ghc-prim:GHC.Types.I# 0#)
+            of {
+            False ->
+                jump $j_i2jrH
+                (GHC.Base.build
+                    @[Char]
+                    (\ (@a3_i2jsB)
+                        (c1_i2jsC [Occ=Once1!,
+                                    OS=OneShot]
+                            :: [Char]
+                            -> a3_i2jsB -> a3_i2jsB)
+                        (n_i2jsD [Occ=Once1,
+                                OS=OneShot]
+                            :: a3_i2jsB) ->
+                        c1_i2jsC
+                        (GHC.Base.build
+                            @Char
+                            (\ (@b_i2jsE) ->
+                                ghc-prim:GHC.CString.unpackFoldrCString#
+                                @b_i2jsE
+                                "Impossible: Negative offset"#))
+                        n_i2jsD));
+            True ->
+                jump $j_i2jrH
+                (GHC.Base.build
+                    @[Char]
+
+Just by removing ``NOINLINE`` we have reduced the Core of ``addrTxOutL`` to 635
+terms. The Core is also better optimized: now both the ``True`` and ``False``
+branch jump to the join point ``$j_i2jrH``. Let's check the Core summary for
+``Cardano.Ledger.Address``:
+
+.. code-block:: haskell
+
+   ==================== Tidy Core ====================
+   2023-09-22 14:45:53.829768066 UTC
+
+   Result size of Tidy Core
+     = {terms: 50,443, types: 53,109, coercions: 19,256, joins: 92/906}
+
+Just from one change we have shaved off 10,000 terms. We can still go further;
+recall that on |old| ``fromCborAddr`` was specialized but was not on ``new``.
+Let's revert the ``NOINLINE`` and see how the Core reacts to specializing
+``fromCborAddr``.
+
+output on |old| because ``failDecoding`` is still marked ``NOINLINE``. Let's run
+a microbenchmark to see if this change is reflected in time.
+
+|old|:
+
+.. code-block:: console
+
+   [nix-shell:~/cardano-ledger]$ cabal bench cardano-ledger-core:addr
+   Build profile: -w ghc-8.10.7 -O1
+   In order, the following will be built (use -v for more details):
+    - cardano-ledger-core-1.7.0.0 (lib) (file src/Cardano/Ledger/Core.hs changed)
+    - cardano-ledger-core-1.7.0.0 (lib:testlib) (dependency rebuilt)
+    - cardano-ledger-core-1.7.0.0 (bench:addr) (dependency rebuilt)
+   Preprocessing library for cardano-ledger-core-1.7.0.0..
+   Building library for cardano-leRunning 1 benchmarks...
+   Benchmark addr: RUNNING...
+   benchmarking decodeAddr (500)
+   time                 236.6 μs   (235.2 μs .. 238.5 μs)
+                       1.000 R²   (0.999 R² .. 1.000 R²)
+   mean                 236.8 μs   (235.4 μs .. 238.4 μs)
+   std dev              5.308 μs   (4.187 μs .. 6.549 μs)
+
+   benchmarking decodeAddr (1000)
+   time                 419.6 μs   (418.4 μs .. 420.9 μs)
+                       1.000 R²   (1.000 R² .. 1.000 R²)
+   mean                 421.1 μs   (420.1 μs .. 422.5 μs)
+   std dev              3.992 μs   (2.800 μs .. 6.338 μs)
+
+   Benchmark addr: FINISH
+
+|new| with ``failDecoding`` marked ``NOINLINE``:
+
+|new| without ``failDecoding`` marked ``NOINLINE``:
+
+.. code-block:: console
+
+   [nix-shell:~/cardano-ledger]$ cabal bench cardano-ledger-core:addr
+   Build profile: -w ghc-9.2.8 -O1
+   Preprocessing benchmark 'addr' for cardano-ledger-core-1.7.0.0..
+   Building benchmark 'addr' for cardano-ledger-core-1.7.0.0..
+   Running 1 benchmarks...
+   Benchmark addr: RUNNING...
+   benchmarking decodeAddr (500)
+   time                 239.6 μs   (237.3 μs .. 241.8 μs)
+                        0.999 R²   (0.999 R² .. 1.000 R²)
+   mean                 238.7 μs   (237.6 μs .. 239.7 μs)
+   std dev              3.677 μs   (3.146 μs .. 4.308 μs)
+
+   benchmarking decodeAddr (1000)
+   time                 474.3 μs   (472.2 μs .. 476.7 μs)
+                        1.000 R²   (0.999 R² .. 1.000 R²)
+   mean                 484.8 μs   (481.1 μs .. 490.7 μs)
+   std dev              14.56 μs   (11.85 μs .. 17.14 μs)
+
+   Benchmark addr: FINISH
+
 
 
 
@@ -912,3 +1288,12 @@ only have two, and the only two are values not type class dictionaries.
 
 .. [#] As stated by ``Note [INLINE and default methods]`` in GHC source.
        Default methods are a special case that are always ``Compulsory``.
+.. [#] See `This issue <https://gitlab.haskell.org/ghc/ghc/-/issues/22629>`_, in
+       fact there are many issues edge cases in the intersection of ``NOINLINE``
+       and the optimizer, most notably `it prevents
+       <https://gitlab.haskell.org/ghc/ghc/-/issues/21458>`_, `specialization
+       <https://gitlab.haskell.org/ghc/ghc/-/issues/22629>`_.
+.. [#] See :ref:`INLINE vs INLINEABLE vs NOINLINE <Inline Chapter>`. `Mark
+       Karpov <https://markkarpov.com/>`_ also has a great `post
+       <https://markkarpov.com/tutorial/ghc-optimization-and-fusion.html#specializing>`_
+       on this subtle dance.

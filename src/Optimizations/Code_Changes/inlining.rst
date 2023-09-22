@@ -1,4 +1,4 @@
-.. _Inlining Chapter:
+.. _Inline Chapter:
 
 :lightgrey:`Inlining Pragma and Friends`
 ========================================
