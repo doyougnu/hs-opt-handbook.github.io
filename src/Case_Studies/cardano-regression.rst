@@ -324,6 +324,48 @@ function is another prime candidate for inlining.
 Understanding the Cardano.Ledger.Address.updateStakeDistribution Regression
 ---------------------------------------------------------------------------
 
+One of the useful but often overlooked features of GHC's profiler is the
+explicit call stack that is reported alongside the summary. In the Cardano
+Ledger code base, this is especially useful because the ledger is a large Cabal
+project consisting of 39 packages and hundreds of modules. From the summary
+output, we know that the ``updateStakeDistribution`` is in the critical path of
+the regression, so we can search the rest of the profile to observe the rest of
+the critical path:
+
+.. code-block:: bash
+
+
+   COST CENTRE                          MODULE                                              SRC                                                                            no.       entries      %time %alloc   %time %alloc
+
+          ...
+          updateStakeDistribution       Cardano.Ledger.Shelley.LedgerState.IncrementalStake src/Cardano/Ledger/Shelley/LedgerState/IncrementalStake.hs:(92,1)-(95,84)      15633     1            3.8   11.8     6.7   13.6
+           runStateT                    Control.Monad.Trans.State.Lazy                      Control/Monad/Trans/State/Lazy.hs:161:33-41                                    15640     104000052    0.0    0.0     0.0    0.0
+           addrEitherBabbageTxOutL      Cardano.Ledger.Babbage.TxOut                        src/Cardano/Ledger/Babbage/TxOut.hs:(218,1)-(227,5)                            15634     5000004      0.2    0.7     0.3    0.8
+            getEitherAddrBabbageTxOut   Cardano.Ledger.Babbage.TxOut                        src/Cardano/Ledger/Babbage/TxOut.hs:(601,1)-(611,90)                           15635     5000004      0.1    0.1     0.1    0.1
+             decodeAddress28            Cardano.Ledger.Alonzo.TxOut                         src/Cardano/Ledger/Alonzo/TxOut.hs:(118,1)-(129,58)                            15636     1000001      0.0    0.1     0.0    0.1
+          ...
+
+
+We see that ``updateStakeDistribution`` is calling ``runStateT``,
+``addrEitherBabbageTxOutL``, ``getEitherAddrBabbageTxOut``, and
+``decodeAddress28``. Furthermore, GHC is attributing 11.8% of allocations to
+``updateStakeDistribution`` even though ``updateStakeDistribution`` is only
+entered once (the ``1`` in the ``entries`` column). So it is the entry point to
+the regression's critical path. Therefore, we'll inspect and compare the Core of
+``addrEitherBabbageTxOutL``, ``getEitherAddrBabbageTxOut``, and
+``decodeAddress28`` before developing a hypothesis.
+
+.. note::
+   This sequence of calls: ``updateStakeDistribution``, ``runStateT``,
+   ``addrEitherBabbageTxOutL``, ``getEitherAddrBabbageTxOut``, and
+   ``decodeAddress28`` is repeated four times in the profile, but never differs.
+   I'm only showing one such sequence for brevity.
+
+TODO start here tomorrow
+
+Going Further
+-------------
+
 The regression is directly observable from the Core summary output that GHC
 produces at the top of each Core file. Here is the Core summary on |new| for
 ``Cardano.Ledger.Address`` :
