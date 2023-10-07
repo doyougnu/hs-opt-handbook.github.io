@@ -324,13 +324,12 @@ function is another prime candidate for inlining.
 Understanding the Cardano.Ledger.Address.updateStakeDistribution Regression
 ---------------------------------------------------------------------------
 
-One of the useful but often overlooked features of GHC's profiler is the
-explicit call stack that is reported alongside the summary. In the Cardano
-Ledger code base, this is especially useful because the ledger is a large Cabal
-project consisting of 39 packages and hundreds of modules. From the summary
-output, we know that the ``updateStakeDistribution`` is in the critical path of
-the regression, so we can search the rest of the profile to observe the rest of
-the critical path:
+One of the useful features of GHC's profiler is the explicit call stack that is
+reported alongside the summary. In the Cardano Ledger code base, this is
+especially useful because the ledger is a large Cabal project consisting of 39
+packages and hundreds of modules. From the summary output, we know that the
+``updateStakeDistribution`` is in the critical path of the regression, so we can
+search the remainder of the profile to observe the rest of the critical path:
 
 .. code-block:: bash
 
@@ -361,7 +360,515 @@ the regression's critical path. Therefore, we'll inspect and compare the Core of
    ``decodeAddress28`` is repeated four times in the profile, but never differs.
    I'm only showing one such sequence for brevity.
 
-TODO start here tomorrow
+Now we'll check each function's Core to observe a difference between |old| and
+|new| beginning with the top of the call stack: ``decodeAddress28``.
+
+Note to self before:
+  - 928 looks like it optimizes this function better!
+  - 810 makes it a join point
+  - 928 just inlines
+  - even the unfolding is better on 928: it sinks the let for PackedBytes28
+
+|old|:
+
+.. code-block:: haskell
+
+    -- RHS size: {terms: 96, types: 79, coercions: 50, joins: 1/2}
+    decodeAddress28 [InlPrag=INLINE (sat-args=2)]
+    :: forall c.
+        HashAlgorithm (ADDRHASH c) =>
+        Credential 'Staking c -> Addr28Extra -> Maybe (Addr c)
+    [GblId,
+    Arity=3,
+    Caf=NoCafRefs,
+    Str=<S(SLLL),1*U(1*U,A,A,A)><L,U><S,1*U(U,U,U,U)>,
+    Unf=Unf{Src=InlineStable, TopLvl=True, Value=True, ConLike=True,
+            WorkFree=True, Expandable=True,
+            Guidance=ALWAYS_IF(arity=3,unsat_ok=False,boring_ok=False)
+            Tmpl= \ (@ c_a5pDW)
+            ...
+
+|new|:
+
+.. code-block:: haskell
+
+    -- RHS size: {terms: 54, types: 81, coercions: 52, joins: 0/0}
+    decodeAddress28 [InlPrag=INLINE (sat-args=2)]
+    :: forall c.
+        HashAlgorithm (ADDRHASH c) =>
+        Credential 'Staking c -> Addr28Extra -> Maybe (Addr c)
+    [GblId,
+    Arity=3,
+    Str=<1P(1L,A,A,A)><L><1P(L,L,L,L)>,
+    Unf=Unf{Src=InlineStable, TopLvl=True, Value=True, ConLike=True,
+            WorkFree=True, Expandable=True,
+            Guidance=ALWAYS_IF(arity=2,unsat_ok=False,boring_ok=False)
+            Tmpl= \ (@c_a2yQq)
+            ...
+
+On |new| ``decodeAddress28`` is only 54 terms and has no join points, however,
+on |old| ``decodeAddress28`` is 96 terms and has join points. Let's spot check
+the optimized body of the function to see the difference first hand. Note that
+both versions show ``InlPrag=INLINE`` meaning that the source code has an
+``INLINE`` pragma and therefore ``getEitherAddrBabbageTxOut`` will use the
+unfolding of ``decodeAddress28`` (i.e., the Core on the right hand side of
+``Tmpl``).
+
+|new|:
+
+.. code-block:: haskell
+
+   decodeAddress28
+   = \ (@c_a2yQq)
+       ($dHashAlgorithm_a2yQr :: HashAlgorithm (ADDRHASH c_a2yQq))
+       (eta_X1q :: Credential 'Staking c_a2yQq)
+       (eta1_X1r :: Addr28Extra) ->
+       case eta1_X1r of
+       { Addr28Extra dt_d2DMO dt1_d2DMP dt2_d2DMQ dt3_d2DMR ->
+       case GHC.Num.Natural.naturalEq#
+               ((Cardano.Crypto.Hash.Class.$p1HashAlgorithm
+                   @(ADDRHASH c_a2yQq) $dHashAlgorithm_a2yQr)
+               `cast` (GHC.TypeNats.N:KnownNat[0] <SizeHash (ADDRHASH c_a2yQq)>_N
+                       ; GHC.TypeNats.N:SNat[0] <SizeHash (ADDRHASH c_a2yQq)>_P
+                       :: KnownNat (SizeHash (ADDRHASH c_a2yQq)) ~R# Natural))
+               Cardano.Ledger.Alonzo.TxOut.getAlonzoTxOutEitherAddr3
+       of {
+           __DEFAULT -> GHC.Maybe.Nothing @(Addr c_a2yQq);
+           1# ->
+           case Unsafe.Coerce.unsafeEqualityProof
+                   @(*)
+                   @(ghc-prim:GHC.Types.Any :~: ghc-prim:GHC.Types.Any)
+                   @(SizeHash (ADDRHASH c_a2yQq) :~: 28)
+           of
+           { Unsafe.Coerce.UnsafeRefl co_a2HvY ->
+           GHC.Maybe.Just
+               @(Addr c_a2yQq)
+               (Cardano.Ledger.Address.Addr
+               @c_a2yQq
+               (case ghc-prim:GHC.Prim.and# dt3_d2DMR 2## of {
+                   __DEFAULT -> Cardano.Ledger.BaseTypes.Mainnet;
+                   0## -> Cardano.Ledger.BaseTypes.Testnet
+                   })
+               (case ghc-prim:GHC.Prim.and# dt3_d2DMR 1## of {
+                   __DEFAULT ->
+                       Cardano.Ledger.Credential.KeyHashObj
+                       @'Payment
+                       @c_a2yQq
+                       ((cardano-crypto-class-2.1.2.0-AvwSxmsDYBzI1yIWWm4yyw:Cardano.Crypto.PackedBytes.PackedBytes28
+                           @28
+                           @~(<28>_N :: 28 ghc-prim:GHC.Prim.~# 28)
+                           dt_d2DMO
+                           dt1_d2DMP
+                           dt2_d2DMQ
+                           (ghc-prim:GHC.Prim.wordToWord32#
+                               (ghc-prim:GHC.Prim.uncheckedShiftRL# dt3_d2DMR 32#)))
+                       `cast` ((PackedBytes
+                                   (Nth:2 (Sub co_a2HvY)
+                                   ; Nth:1 (Sub (Sym co_a2HvY))))_R
+                               ; Sym (Cardano.Crypto.Hash.Class.N:Hash[0]
+                                           <ADDRHASH c_a2yQq>_N
+                                           <Cardano.Crypto.DSIGN.Class.VerKeyDSIGN
+                                               (DSIGN c_a2yQq)>_P)
+                               ; Sym (Cardano.Ledger.Keys.N:KeyHash[0] <'Payment>_P <c_a2yQq>_N)
+                               :: PackedBytes 28 ~R# KeyHash 'Payment c_a2yQq));
+                   0## ->
+                       Cardano.Ledger.Credential.ScriptHashObj
+                       @'Payment
+                       @c_a2yQq
+                       ((cardano-crypto-class-2.1.2.0-AvwSxmsDYBzI1yIWWm4yyw:Cardano.Crypto.PackedBytes.PackedBytes28
+                           @28
+                           @~(<28>_N :: 28 ghc-prim:GHC.Prim.~# 28)
+                           dt_d2DMO
+                           dt1_d2DMP
+                           dt2_d2DMQ
+                           (ghc-prim:GHC.Prim.wordToWord32#
+                               (ghc-prim:GHC.Prim.uncheckedShiftRL# dt3_d2DMR 32#)))
+                       `cast` ((PackedBytes
+                                   (Nth:2 (Sub co_a2HvY)
+                                   ; Nth:1 (Sub (Sym co_a2HvY))))_R
+                               ; Sym (Cardano.Crypto.Hash.Class.N:Hash[0]
+                                           <ADDRHASH c_a2yQq>_N <EraIndependentScript>_P)
+                               ; Sym (Cardano.Ledger.Hashes.N:ScriptHash[0] <c_a2yQq>_N)
+                               :: PackedBytes 28 ~R# ScriptHash c_a2yQq))
+                   })
+               (Cardano.Ledger.Credential.$WStakeRefBase @c_a2yQq eta_X1q))
+           }
+       }
+       }
+
+Let's orient ourselves before checking |old|. We see that ``decodeAddress28``
+takes four arguments: a type variable called ``c_a2yQq``, a type class
+dictionary called ``$dHashAlgorithm_a2yQr``, and two eta-expanded variables:
+``eta_X1q`` and ``eta1_X1r``. It then immediately scrutinizes ``eta1_X1r`` to
+bind ``Addr28Extra dt_d2DMO dt1_d2DMP dt2_d2DMQ dt3_d2DMR`` and checks the
+equality of the CAF ``Cardano.Ledger.Alonzo.TxOut.getAlonzoTxOutEitherAddr3``
+and the result of the application of the superclass ``p1HashAlgorithm`` to the
+type variable ``c_a2yQq`` and the dictionary ``$dHashAlgorithm_a2yQr``. In
+general, this Core looks very good. Its concise, we don't see any duplication,
+its using unboxed values and primitives such as ``0##``,
+``ghc-prim:GHC.Prim.and# dt3_d2DMR 2##``, and ``GHC.Num.Natural.naturalEq#``.
+Now let's check |old|:
+
+
+|old|:
+
+.. code-block:: haskell
+
+
+    decodeAddress28
+    = \ (@ c_a5pDW)
+        ($dHashAlgorithm_a5pDY :: HashAlgorithm (ADDRHASH c_a5pDW))
+        (eta2_X1hM :: Credential 'Staking c_a5pDW)
+        (eta3_X2zx :: Addr28Extra) ->
+        case eta3_X2zx of
+        { Addr28Extra dt_d7b29 dt1_d7b2a dt2_d7b2b dt3_d7b2c ->
+        join {
+            $w$j_s8s7n [InlPrag=NOUSERINLINE[2], Dmd=<L,1*C1(U)>]
+            :: (28 ghc-prim-0.6.1:GHC.Prim.~# SizeHash (ADDRHASH c_a5pDW))
+                -> Maybe (Addr c_a5pDW)
+            [LclId[JoinId(1)], Arity=1, Str=<L,U>, Unf=OtherCon []]
+            $w$j_s8s7n (ww_s8s7l
+                        :: 28 ghc-prim-0.6.1:GHC.Prim.~# SizeHash (ADDRHASH c_a5pDW))
+            = GHC.Maybe.Just
+                @ (Addr c_a5pDW)
+                (Cardano.Ledger.Address.Addr
+                    @ c_a5pDW
+                    (case ghc-prim-0.6.1:GHC.Prim.and# dt3_d7b2c 2## of {
+                        __DEFAULT -> Cardano.Ledger.BaseTypes.Mainnet;
+                        0## -> Cardano.Ledger.BaseTypes.Testnet
+                    })
+                    (case ghc-prim-0.6.1:GHC.Prim.and# dt3_d7b2c 1## of {
+                        __DEFAULT ->
+                        Cardano.Ledger.Credential.KeyHashObj
+                            @ 'Payment
+                            @ c_a5pDW
+                            ((cardano-crypto-class-2.1.2.0:Cardano.Crypto.PackedBytes.PackedBytes28
+                                @ 28
+                                @~ (<28>_N :: 28 ghc-prim-0.6.1:GHC.Prim.~# 28)
+                                dt_d7b29
+                                dt1_d7b2a
+                                dt2_d7b2b
+                                (ghc-prim-0.6.1:GHC.Prim.narrow32Word#
+                                (ghc-prim-0.6.1:GHC.Prim.uncheckedShiftRL# dt3_d7b2c 32#)))
+                            `cast` ((PackedBytes
+                                        ww_s8s7l)_R ; (Sym (Cardano.Crypto.Hash.Class.N:Hash[0]
+                                                                <ADDRHASH c_a5pDW>_N
+                                                                <Cardano.Crypto.DSIGN.Class.VerKeyDSIGN
+                                                                (DSIGN
+                                                                    c_a5pDW)>_P) ; Sym (Cardano.Ledger.Keys.N:KeyHash[0]
+                                                                                            <'Payment>_P
+                                                                                            <c_a5pDW>_N))
+                                    :: PackedBytes 28 ~R# KeyHash 'Payment c_a5pDW));
+                        0## ->
+                        Cardano.Ledger.Credential.ScriptHashObj
+                            @ 'Payment
+                            @ c_a5pDW
+                            ((cardano-crypto-class-2.1.2.0:Cardano.Crypto.PackedBytes.PackedBytes28
+                                @ 28
+                                @~ (<28>_N :: 28 ghc-prim-0.6.1:GHC.Prim.~# 28)
+                                dt_d7b29
+                                dt1_d7b2a
+                                dt2_d7b2b
+                                (ghc-prim-0.6.1:GHC.Prim.narrow32Word#
+                                (ghc-prim-0.6.1:GHC.Prim.uncheckedShiftRL# dt3_d7b2c 32#)))
+                            `cast` ((PackedBytes
+                                        ww_s8s7l)_R ; (Sym (Cardano.Crypto.Hash.Class.N:Hash[0]
+                                                                <ADDRHASH c_a5pDW>_N
+                                                                <EraIndependentScript>_P) ; Sym (Cardano.Ledger.Hashes.N:ScriptHash[0]
+                                                                                                    <c_a5pDW>_N))
+                                    :: PackedBytes 28 ~R# ScriptHash c_a5pDW))
+                    })
+                    (Cardano.Ledger.Credential.$WStakeRefBase
+                        @ c_a5pDW eta2_X1hM)) } in
+        case (Cardano.Crypto.Hash.Class.$p1HashAlgorithm
+                @ (ADDRHASH c_a5pDW) $dHashAlgorithm_a5pDY)
+            `cast` (GHC.TypeNats.N:KnownNat[0] <SizeHash
+                                                    (ADDRHASH c_a5pDW)>_N ; GHC.TypeNats.N:SNat[0]
+                                                                                <SizeHash
+                                                                                    (ADDRHASH
+                                                                                    c_a5pDW)>_P
+                    :: KnownNat (SizeHash (ADDRHASH c_a5pDW)) ~R# GHC.Natural.Natural)
+        of {
+            GHC.Natural.NatS# a1_a7mr6 ->
+            case Cardano.Ledger.Alonzo.TxOut.$fAlonzoEraTxOutAlonzoEra43 of {
+                GHC.Natural.NatS# b1_a7mr9 ->
+                case ghc-prim-0.6.1:GHC.Prim.eqWord# a1_a7mr6 b1_a7mr9 of {
+                    __DEFAULT -> GHC.Maybe.Nothing @ (Addr c_a5pDW);
+                    1# ->
+                    jump $w$j_s8s7n
+                        @~ (UnsafeCo nominal 28 (SizeHash (ADDRHASH c_a5pDW))
+                            :: 28 ghc-prim-0.6.1:GHC.Prim.~# SizeHash (ADDRHASH c_a5pDW))
+                };
+                GHC.Natural.NatJ# ipv_a7ovU -> GHC.Maybe.Nothing @ (Addr c_a5pDW)
+            };
+            GHC.Natural.NatJ# dt4_a7mre ->
+            case Cardano.Ledger.Alonzo.TxOut.$fAlonzoEraTxOutAlonzoEra43 of {
+                GHC.Natural.NatS# ipv_a7ovW -> GHC.Maybe.Nothing @ (Addr c_a5pDW);
+                GHC.Natural.NatJ# dt5_a7mri ->
+                let {
+                    nx#_a7mrh :: integer-gmp-1.0.3.0:GHC.Integer.Type.GmpSize#
+                    [LclId]
+                    nx#_a7mrh
+                    = ghc-prim-0.6.1:GHC.Prim.uncheckedIShiftRL#
+                        (ghc-prim-0.6.1:GHC.Prim.sizeofByteArray# dt4_a7mre) 3# } in
+                case ghc-prim-0.6.1:GHC.Prim.==#
+                        nx#_a7mrh
+                        (ghc-prim-0.6.1:GHC.Prim.uncheckedIShiftRL#
+                            (ghc-prim-0.6.1:GHC.Prim.sizeofByteArray# dt5_a7mri) 3#)
+                of {
+                    __DEFAULT -> GHC.Maybe.Nothing @ (Addr c_a5pDW);
+                    1# ->
+                    case {__pkg_ccall integer-gmp-1.0.3.0 ByteArray#
+                                    -> ByteArray#
+                                    -> Int#
+                                    -> State# RealWorld
+                                    -> (# State# RealWorld, Int# #)}_a7mrl
+                            dt4_a7mre dt5_a7mri nx#_a7mrh ghc-prim-0.6.1:GHC.Prim.realWorld#
+                    of
+                    { (# ds2_a7mrn, ds3_a7mro #) ->
+                    case ds3_a7mro of {
+                        __DEFAULT -> GHC.Maybe.Nothing @ (Addr c_a5pDW);
+                        0# ->
+                        jump $w$j_s8s7n
+                            @~ (UnsafeCo nominal 28 (SizeHash (ADDRHASH c_a5pDW))
+                                :: 28 ghc-prim-0.6.1:GHC.Prim.~# SizeHash (ADDRHASH c_a5pDW))
+                    }
+                    }
+                }
+            }
+        }
+        }
+
+``decodeAddress28`` is *less* optimized on |old|, it has the same inputs but
+defines a :term:`join point`. Using a join point can be slower than inlining
+[#]_ because the join point may prevent further optimizations that inlining
+would apply, which is the case here. The Core for generated by |old| scrutinizes
+``$p1HashAlgorithm``, leading to an extra case statement and unpacking of
+``GHC.Natural``. In contrast, the Core generated by |new| casts
+``$p1HashAlgorithm`` to a ``GHC.Natural`` which is then consumed by
+``GHC.Num.Natural.naturalEq#``; no extra case needed and the cast will occur at
+compile time.
+
+We have observed a difference in the optimized versions of ``decodeAddress28``,
+now let's check its onfoldings:
+
+|new|:
+
+.. code-block:: haskell
+
+   -- RHS size: {terms: 54, types: 81, coercions: 52, joins: 0/0}
+decodeAddress28 [InlPrag=INLINE (sat-args=2)]
+  :: forall c.
+     HashAlgorithm (ADDRHASH c) =>
+     Credential 'Staking c -> Addr28Extra -> Maybe (Addr c)
+[GblId,
+ Arity=3,
+ Str=<1P(1L,A,A,A)><L><1P(L,L,L,L)>,
+ Unf=Unf{Src=InlineStable, TopLvl=True, Value=True, ConLike=True,
+         WorkFree=True, Expandable=True,
+         Guidance=ALWAYS_IF(arity=2,unsat_ok=False,boring_ok=False)
+         Tmpl= \ (@c_a2yQq)
+                 ($dHashAlgorithm_a2yQr [Occ=Once1]
+                    :: HashAlgorithm (ADDRHASH c_a2yQq))
+                 (eta_X1q [Occ=Once1] :: Credential 'Staking c_a2yQq)
+                 (eta1_X1r [Occ=Once1!] :: Addr28Extra) ->
+                 case eta1_X1r of
+                 { Addr28Extra dt_d2DMO [Occ=Once2] dt1_d2DMP [Occ=Once2]
+                               dt2_d2DMQ [Occ=Once2] dt3_d2DMR ->
+                 case (Cardano.Crypto.Hash.Class.$p1HashAlgorithm
+                         @(ADDRHASH c_a2yQq) $dHashAlgorithm_a2yQr)
+                      `cast` (GHC.TypeNats.N:KnownNat[0] <SizeHash (ADDRHASH c_a2yQq)>_N
+                              ; GHC.TypeNats.N:SNat[0] <SizeHash (ADDRHASH c_a2yQq)>_P
+                              :: KnownNat (SizeHash (ADDRHASH c_a2yQq)) ~R# Natural)
+                 of x1_a2ARA [Occ=Once1]
+                 { __DEFAULT ->
+                 case GHC.Num.Natural.naturalEq# x1_a2ARA 28 of {
+                   __DEFAULT -> GHC.Maybe.Nothing @(Addr c_a2yQq);
+                   1# ->
+                     case Unsafe.Coerce.unsafeEqualityProof
+                            @(*)
+                            @(ghc-prim:GHC.Types.Any :~: ghc-prim:GHC.Types.Any)
+                            @(SizeHash (ADDRHASH c_a2yQq) :~: 28)
+                     of
+                     { Unsafe.Coerce.UnsafeRefl co_a2HvY ->
+                     GHC.Maybe.Just
+                       @(Addr c_a2yQq)
+                       (Cardano.Ledger.Address.Addr
+                          @c_a2yQq
+                          (case GHC.Word.neWord64
+                                  (GHC.Word.W64# (ghc-prim:GHC.Prim.and# dt3_d2DMR 2##))
+                                  (GHC.Word.W64# 0##)
+                           of {
+                             False -> Cardano.Ledger.BaseTypes.Testnet;
+                             True -> Cardano.Ledger.BaseTypes.Mainnet
+                           })
+                          (case GHC.Word.neWord64
+                                  (GHC.Word.W64# (ghc-prim:GHC.Prim.and# dt3_d2DMR 1##))
+                                  (GHC.Word.W64# 0##)
+                           of {
+                             False ->
+                               Cardano.Ledger.Credential.$WScriptHashObj
+                                 @'Payment
+                                 @c_a2yQq
+                                 ((cardano-crypto-class-2.1.2.0-AvwSxmsDYBzI1yIWWm4yyw:Cardano.Crypto.PackedBytes.$WPackedBytes28
+                                     (GHC.Word.W64# dt_d2DMO)
+                                     (GHC.Word.W64# dt1_d2DMP)
+                                     (GHC.Word.W64# dt2_d2DMQ)
+                                     (GHC.Word.W32#
+                                        (ghc-prim:GHC.Prim.wordToWord32#
+                                           (ghc-prim:GHC.Prim.uncheckedShiftRL# dt3_d2DMR 32#))))
+                                  `cast` ((PackedBytes
+                                             (Nth:2 (Sub co_a2HvY)
+                                              ; Nth:1 (Sub (Sym co_a2HvY))))_R
+                                          ; Sym (Cardano.Crypto.Hash.Class.N:Hash[0]
+                                                     <ADDRHASH c_a2yQq>_N <EraIndependentScript>_P)
+                                          ; Sym (Cardano.Ledger.Hashes.N:ScriptHash[0] <c_a2yQq>_N)
+                                          :: PackedBytes 28 ~R# ScriptHash c_a2yQq));
+                             True ->
+                               Cardano.Ledger.Credential.$WKeyHashObj
+                                 @'Payment
+                                 @c_a2yQq
+                                 ((cardano-crypto-class-2.1.2.0-AvwSxmsDYBzI1yIWWm4yyw:Cardano.Crypto.PackedBytes.$WPackedBytes28
+                                     (GHC.Word.W64# dt_d2DMO)
+                                     (GHC.Word.W64# dt1_d2DMP)
+                                     (GHC.Word.W64# dt2_d2DMQ)
+                                     (GHC.Word.W32#
+                                        (ghc-prim:GHC.Prim.wordToWord32#
+                                           (ghc-prim:GHC.Prim.uncheckedShiftRL# dt3_d2DMR 32#))))
+                                  `cast` ((PackedBytes
+                                             (Nth:2 (Sub co_a2HvY)
+                                              ; Nth:1 (Sub (Sym co_a2HvY))))_R
+                                          ; Sym (Cardano.Crypto.Hash.Class.N:Hash[0]
+                                                     <ADDRHASH c_a2yQq>_N
+                                                     <Cardano.Crypto.DSIGN.Class.VerKeyDSIGN
+                                                        (DSIGN c_a2yQq)>_P)
+                                          ; Sym (Cardano.Ledger.Keys.N:KeyHash[0]
+                                                     <'Payment>_P <c_a2yQq>_N)
+                                          :: PackedBytes 28 ~R# KeyHash 'Payment c_a2yQq))
+                           })
+                          (Cardano.Ledger.Credential.$WStakeRefBase @c_a2yQq eta_X1q))
+                     }
+                 }
+                 }
+                 }}]
+
+|old|:
+
+.. code-block:: haskell
+
+   -- RHS size: {terms: 96, types: 79, coercions: 50, joins: 1/2}
+   decodeAddress28 [InlPrag=INLINE (sat-args=2)]
+     :: forall c.
+        HashAlgorithm (ADDRHASH c) =>
+        Credential 'Staking c -> Addr28Extra -> Maybe (Addr c)
+   [GblId,
+    Arity=3,
+    Caf=NoCafRefs,
+    Str=<S(SLLL),1*U(1*U,A,A,A)><L,U><S,1*U(U,U,U,U)>,
+    Unf=Unf{Src=InlineStable, TopLvl=True, Value=True, ConLike=True,
+            WorkFree=True, Expandable=True,
+            Guidance=ALWAYS_IF(arity=3,unsat_ok=False,boring_ok=False)
+            Tmpl= \ (@ c_a5pDW)
+                    ($dHashAlgorithm_a5pDY [Occ=OnceL1]
+                       :: HashAlgorithm (ADDRHASH c_a5pDW)) ->
+                    let {
+                      $dKnownNat_s7bbH [Occ=OnceL1] :: GHC.Natural.Natural
+                      [LclId, Unf=OtherCon []]
+                      $dKnownNat_s7bbH = 28 } in
+                    let {
+                      $dKnownNat1_a5pE7 [Occ=OnceL1]
+                        :: KnownNat (SizeHash (ADDRHASH c_a5pDW))
+                      [LclId]
+                      $dKnownNat1_a5pE7
+                        = Cardano.Crypto.Hash.Class.$p1HashAlgorithm
+                            @ (ADDRHASH c_a5pDW) $dHashAlgorithm_a5pDY } in
+                    \ (stakeRef_a5odb [Occ=Once1] :: Credential 'Staking c_a5pDW)
+                      (ds_d5JEl [Occ=Once1!] :: Addr28Extra) ->
+                      case ds_d5JEl of
+                      { Addr28Extra dt_d7b29 [Occ=Once1] dt1_d7b2a [Occ=Once1]
+                                    dt2_d7b2b [Occ=Once1] dt3_d7b2c ->
+                      case sameNat
+                             @ (SizeHash (ADDRHASH c_a5pDW))
+                             @ 28
+                             $dKnownNat1_a5pE7
+                             ($dKnownNat_s7bbH
+                              `cast` (Sym (GHC.TypeNats.N:SNat[0]
+                                               <28>_P) ; Sym (GHC.TypeNats.N:KnownNat[0]) <28>_N
+                                      :: GHC.Natural.Natural ~R# KnownNat 28))
+                             (Data.Proxy.Proxy @ Nat @ (SizeHash (ADDRHASH c_a5pDW)))
+                             (Data.Proxy.Proxy @ Nat @ 28)
+                      of {
+                        Nothing -> GHC.Maybe.Nothing @ (Addr c_a5pDW);
+                        Just x_a7baN [Occ=Once1!] ->
+                          case x_a7baN of { Refl co_a5pEe ->
+                          let {
+                            addrHash_s7bbM [Occ=Once2] :: PackedBytes 28
+                            [LclId]
+                            addrHash_s7bbM
+                              = cardano-crypto-class-2.1.2.0:Cardano.Crypto.PackedBytes.$WPackedBytes28
+                                  (GHC.Word.W64# dt_d7b29)
+                                  (GHC.Word.W64# dt1_d7b2a)
+                                  (GHC.Word.W64# dt2_d7b2b)
+                                  (GHC.Word.W32#
+                                     (ghc-prim-0.6.1:GHC.Prim.narrow32Word#
+                                        (ghc-prim-0.6.1:GHC.Prim.uncheckedShiftRL#
+                                           dt3_d7b2c 32#))) } in
+                          GHC.Maybe.Just
+                            @ (Addr c_a5pDW)
+                            (Cardano.Ledger.Address.Addr
+                               @ c_a5pDW
+                               (case GHC.Word.neWord64
+                                       (GHC.Word.W64# (ghc-prim-0.6.1:GHC.Prim.and# dt3_d7b2c 2##))
+                                       (GHC.Word.W64# 0##)
+                                of {
+                                  False -> Cardano.Ledger.BaseTypes.Testnet;
+                                  True -> Cardano.Ledger.BaseTypes.Mainnet
+                                })
+                               (case GHC.Word.neWord64
+                                       (GHC.Word.W64# (ghc-prim-0.6.1:GHC.Prim.and# dt3_d7b2c 1##))
+                                       (GHC.Word.W64# 0##)
+                                of {
+                                  False ->
+                                    Cardano.Ledger.Credential.$WScriptHashObj
+                                      @ 'Payment
+                                      @ c_a5pDW
+                                      (addrHash_s7bbM
+                                       `cast` ((PackedBytes
+                                                  co_a5pEe)_R ; (Sym (Cardano.Crypto.Hash.Class.N:Hash[0]
+                                                                          <ADDRHASH c_a5pDW>_N
+                                                                          <EraIndependentScript>_P) ; Sym (Cardano.Ledger.Hashes.N:ScriptHash[0]
+                                                                                                               <c_a5pDW>_N))
+                                               :: PackedBytes 28 ~R# ScriptHash c_a5pDW));
+                                  True ->
+                                    Cardano.Ledger.Credential.$WKeyHashObj
+                                      @ 'Payment
+                                      @ c_a5pDW
+                                      (addrHash_s7bbM
+                                       `cast` ((PackedBytes
+                                                  co_a5pEe)_R ; (Sym (Cardano.Crypto.Hash.Class.N:Hash[0]
+                                                                          <ADDRHASH c_a5pDW>_N
+                                                                          <Cardano.Crypto.DSIGN.Class.VerKeyDSIGN
+                                                                             (DSIGN
+                                                                                c_a5pDW)>_P) ; Sym (Cardano.Ledger.Keys.N:KeyHash[0]
+                                                                                                        <'Payment>_P
+                                                                                                        <c_a5pDW>_N))
+                                               :: PackedBytes 28 ~R# KeyHash 'Payment c_a5pDW))
+                                })
+                               (Cardano.Ledger.Credential.$WStakeRefBase
+                                  @ c_a5pDW stakeRef_a5odb))
+                          }
+                      }
+                      }}]
+
+
+
+
+
+
+
+
+
+
 
 Going Further
 -------------
@@ -1339,3 +1846,6 @@ a microbenchmark to see if this change is reflected in time.
        Karpov <https://markkarpov.com/>`_ also has a great `post
        <https://markkarpov.com/tutorial/ghc-optimization-and-fusion.html#specializing>`_
        on this subtle dance.
+
+.. [#] As stated by Sebastian Graf. See his `Zurihac 2023 <https://youtu.be/DiKjWl9xnvw?si=AZcylREakQfq6yzm&t=3218>`_
+       .
