@@ -363,12 +363,6 @@ the regression's critical path. Therefore, we'll inspect and compare the Core of
 Now we'll check each function's Core to observe a difference between |old| and
 |new| beginning with the top of the call stack: ``decodeAddress28``.
 
-Note to self before:
-  - 928 looks like it optimizes this function better!
-  - 810 makes it a join point
-  - 928 just inlines
-  - even the unfolding is better on 928: it sinks the let for PackedBytes28
-
 |old|:
 
 .. code-block:: haskell
@@ -867,18 +861,217 @@ now let's check the unfoldings:
                       }}]
 
 The unfoldings slightly only slightly differ, |old| allocates a let-bound
-function while |new| eta-expands to four arguments. More importantly |old| does
-not generate a join point in the unfolding. So ``decodeAddress28`` optimizes
-differently on |new| than on |old| we now need to follow the call chain to
-understand on these differences propogate to ``getEitherAddrBabbageTxOut``.
+function while |new| eta-expands to four arguments. More importantly, we can now
+see where the join point came from. |old| generates a ``let`` binding:
+``addrHash_s7bbM`` which is then referenced in the branches of ``case
+GHC.Word.neWord64...``. So the join point is an optimization on that ``let``.
+Whether or not this will be faster than sinking the ``let``, as is the case on
+|new|, is unclear, it very well could be. To check, we can inspect the Core of
+``getEitherAddrBabbageTxOut`` to see how these unfoldings are optimized at their
+call sites. If we find that the join point is preventing optimizations then we
+can conclude that inlining is better for this chain of functions and that |new|
+is better optimizing this code. If we find that the call site does not differ
+and the only difference between |old| and |new| is ``decodeAddress28``, then we
+can conclude that the inlining is not enabling more optimizations and the the
+join point is worth it.
+
+Let's check ``getEitherAddrBabbageTxOut``:
+
+|new|:
+
+.. code-block:: haskell
+
+   -- RHS size: {terms: 58, types: 170, coercions: 16, joins: 0/0}
+   getEitherAddrBabbageTxOut [InlPrag=INLINABLE]
+     :: forall era.
+        (HasCallStack, HashAlgorithm (ADDRHASH (EraCrypto era))) =>
+        BabbageTxOut era
+        -> Either (Addr (EraCrypto era)) (CompactAddr (EraCrypto era))
+                      ...
+
+|old|:
+
+.. code-block:: haskell
+
+   -- RHS size: {terms: 216, types: 293, coercions: 134, joins: 2/4}
+   getEitherAddrBabbageTxOut [InlPrag=INLINABLE]
+     :: forall era.
+        (HasCallStack, HashAlgorithm (ADDRHASH (EraCrypto era))) =>
+        BabbageTxOut era
+        -> Either (Addr (EraCrypto era)) (CompactAddr (EraCrypto era))
+                       ...
 
 
+``getEitherAddrBabbageTxOut`` on |new| is small and simple with only 58 terms.
+On |old| it grows to 216 terms *with* two join points.
+``getEitherAddrBabbageTxOut`` is marked ``INLINEABLE`` so we'll inspect the body
+instead of the unfolding:
+
+|new|:
+
+.. code-block:: haskell
+
+   getEitherAddrBabbageTxOut
+  = \ (@era_a1CtR)
+      ($dIP14_a1CtS :: HasCallStack)
+      ($dHashAlgorithm_a1CtT
+         :: HashAlgorithm (ADDRHASH (EraCrypto era_a1CtR)))
+      (eta_Xl :: BabbageTxOut era_a1CtR) ->
+      case eta_Xl of {
+        TxOutCompact' dt1_d1KDh ds_d1GmE ->
+          Data.Either.Right
+            @(Addr (EraCrypto era_a1CtR))
+            @(CompactAddr (EraCrypto era_a1CtR))
+            ((Data.ByteString.Short.Internal.SBS dt1_d1KDh)
+             `cast` (Sym (Cardano.Ledger.Address.N:CompactAddr[0]
+                              <EraCrypto era_a1CtR>_P)
+                     :: Data.ByteString.Short.Internal.ShortByteString
+                        ~R# CompactAddr (EraCrypto era_a1CtR)));
+        TxOutCompactDH' dt1_d1KDi ds_d1GmF ds1_d1GmG ->
+          Data.Either.Right
+            @(Addr (EraCrypto era_a1CtR))
+            @(CompactAddr (EraCrypto era_a1CtR))
+            ((Data.ByteString.Short.Internal.SBS dt1_d1KDi)
+             `cast` (Sym (Cardano.Ledger.Address.N:CompactAddr[0]
+                              <EraCrypto era_a1CtR>_P)
+                     :: Data.ByteString.Short.Internal.ShortByteString
+                        ~R# CompactAddr (EraCrypto era_a1CtR)));
+        TxOutCompactDatum dt1_d1KDj ds_d1GmK dt2_d1KDk ->
+          Data.Either.Right
+            @(Addr (EraCrypto era_a1CtR))
+            @(CompactAddr (EraCrypto era_a1CtR))
+            ((Data.ByteString.Short.Internal.SBS dt1_d1KDj)
+             `cast` (Sym (Cardano.Ledger.Address.N:CompactAddr[0]
+                              <EraCrypto era_a1CtR>_P)
+                     :: Data.ByteString.Short.Internal.ShortByteString
+                        ~R# CompactAddr (EraCrypto era_a1CtR)));
+        TxOutCompactRefScript dt1_d1KDl ds_d1GmH ds1_d1GmI ds2_d1GmJ ->
+          Data.Either.Right
+            @(Addr (EraCrypto era_a1CtR))
+            @(CompactAddr (EraCrypto era_a1CtR))
+            ((Data.ByteString.Short.Internal.SBS dt1_d1KDl)
+             `cast` (Sym (Cardano.Ledger.Address.N:CompactAddr[0]
+                              <EraCrypto era_a1CtR>_P)
+                     :: Data.ByteString.Short.Internal.ShortByteString
+                        ~R# CompactAddr (EraCrypto era_a1CtR)));
+        TxOut_AddrHash28_AdaOnly stakeRef_a1y6l dt1_d1KDm dt2_d1KDn
+                                 dt3_d1KDo dt4_d1KDp dt5_d1KDq ->
+          case $dHashAlgorithm_a1CtT of
+          { Cardano.Crypto.Hash.Class.C:HashAlgorithm ww1_a1Giq ww2_a1Gir
+                                                      ww3_a1Gis ww4_a1Giu ->
+          case Cardano.Ledger.Alonzo.TxOut.$wdecodeAddress28
+                 @(EraCrypto era_a1CtR)
+                 ww1_a1Giq
+                 stakeRef_a1y6l
+                 dt1_d1KDm
+                 dt2_d1KDn
+                 dt3_d1KDo
+                 dt4_d1KDp
+          of {
+          ...
+
+Notice the last case expression; ``getEitherAddrBabbageTxOut`` explicitly calls
+``decodeAddress28``, this is likely why ``getEitherAddrBabbageTxOut`` is smaller
+on |new|. Let's check |old|:
+
+|old|:
+
+.. code-block:: haskell
+
+   getEitherAddrBabbageTxOut
+   = \ (@ era_a2SDv)
+       ($dIP12_a2SDx :: HasCallStack)
+       ($dHashAlgorithm_a2SDy
+          :: HashAlgorithm (ADDRHASH (EraCrypto era_a2SDv)))
+       (eta4_X1hp :: BabbageTxOut era_a2SDv) ->
+       case eta4_X1hp of {
+         TxOutCompact' dt_d5mAe ds1_d3IkC ->
+           Data.Either.Right
+             @ (Addr (EraCrypto era_a2SDv))
+             @ (CompactAddr (EraCrypto era_a2SDv))
+             ((Data.ByteString.Short.Internal.SBS dt_d5mAe)
+              `cast` (Sym (Cardano.Ledger.Address.N:CompactAddr[0]
+                               <EraCrypto era_a2SDv>_P)
+                      :: Data.ByteString.Short.Internal.ShortByteString
+                         ~R# CompactAddr (EraCrypto era_a2SDv)));
+         TxOutCompactDH' dt_d5mAf ds1_d3IkD ds2_d3IkE ->
+           Data.Either.Right
+             @ (Addr (EraCrypto era_a2SDv))
+             @ (CompactAddr (EraCrypto era_a2SDv))
+             ((Data.ByteString.Short.Internal.SBS dt_d5mAf)
+              `cast` (Sym (Cardano.Ledger.Address.N:CompactAddr[0]
+                               <EraCrypto era_a2SDv>_P)
+                      :: Data.ByteString.Short.Internal.ShortByteString
+                         ~R# CompactAddr (EraCrypto era_a2SDv)));
+         TxOutCompactDatum dt_d5mAg ds1_d3IkI dt1_d5mAh ->
+           Data.Either.Right
+             @ (Addr (EraCrypto era_a2SDv))
+             @ (CompactAddr (EraCrypto era_a2SDv))
+             ((Data.ByteString.Short.Internal.SBS dt_d5mAg)
+              `cast` (Sym (Cardano.Ledger.Address.N:CompactAddr[0]
+                               <EraCrypto era_a2SDv>_P)
+                      :: Data.ByteString.Short.Internal.ShortByteString
+                         ~R# CompactAddr (EraCrypto era_a2SDv)));
+         TxOutCompactRefScript dt_d5mAi ds1_d3IkF ds2_d3IkG ds3_d3IkH ->
+           Data.Either.Right
+             @ (Addr (EraCrypto era_a2SDv))
+             @ (CompactAddr (EraCrypto era_a2SDv))
+             ((Data.ByteString.Short.Internal.SBS dt_d5mAi)
+              `cast` (Sym (Cardano.Ledger.Address.N:CompactAddr[0]
+                               <EraCrypto era_a2SDv>_P)
+                      :: Data.ByteString.Short.Internal.ShortByteString
+                         ~R# CompactAddr (EraCrypto era_a2SDv)));
+         TxOut_AddrHash28_AdaOnly stakeRef_a2PWm dt_d5mAj dt1_d5mAk
+                                  dt2_d5mAl dt3_d5mAm dt4_d5mAn ->
+           case $dHashAlgorithm_a2SDy of
+           { Cardano.Crypto.Hash.Class.C:HashAlgorithm ww1_a3Hw4 ww2_a3Hw5
+                                                       ww3_a3Hw6 ww4_a3Hw7 ->
+           join {
+             $w$j_a5wdt [InlPrag=NOUSERINLINE[2], Dmd=<L,1*C1(U)>]
 
 
+Sure enough. |old| inlines ``decodeAddress28`` and takes advantage of the join
+point. From the Core meta data of ``decodeAddress28`` we can see that |new|
+decides ``decodeAddress28`` can be inlined due to the ``InlPrag`` field at the
+function header: ``decodeAddress28 [InlPrag=INLINE (sat-args=2)]``. However, it
+does not look like ``decodeAddress28`` is inlined across packages (``alonzo`` is
+a different package than ``babbage`` in the Cardano code base). Furthermore, we
+can check the source code. We should find that ``decodeAddress28`` is in the
+export list of its module and that it is *not* marked ``INLINE``, or else it
+should have been inlined across the package boundary:
 
+.. code-block:: haskell
 
+   module Cardano.Ledger.Alonzo.TxOut (
+     ...
+     decodeDataHash32,
+     encodeDataHash32,
+     encodeAddress28,
+     decodeAddress28,
+     ...
+   )
+   where
+   ...
+   decodeAddress28 ::
+     forall c.
+     HashAlgorithm (ADDRHASH c) =>
+     Credential 'Staking c ->
+     Addr28Extra ->
+     Maybe (Addr c)
+   decodeAddress28 stakeRef (Addr28Extra a b c d) = do
+     Refl <- sameNat (Proxy @(SizeHash (ADDRHASH c))) (Proxy @28)
+     let network = if d `testBit` 1 then Mainnet else Testnet
+         paymentCred =
+           if d `testBit` 0
+             then KeyHashObj (KeyHash addrHash)
+             else ScriptHashObj (ScriptHash addrHash)
+         addrHash :: Hash (ADDRHASH c) a
+         addrHash =
+           hashFromPackedBytes $
+             PackedBytes28 a b c (fromIntegral (d `shiftR` 32))
+     pure $! Addr network paymentCred (StakeRefBase stakeRef)
 
-
+TODO start here tomorrow
 
 Going Further
 -------------
