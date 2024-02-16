@@ -94,6 +94,7 @@ exclude_patterns = [ '_build'
                    , 'custom.rst'
                    , '.direnv'
                    , 'code/lethargy/.direnv'
+                   , 'code/perf/.direnv'
                    ]
 
 

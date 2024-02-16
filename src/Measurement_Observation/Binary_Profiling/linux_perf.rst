@@ -1,6 +1,18 @@
 .. _Perf Chapter:
 
-:lightgrey:`The Linux perf utility`
-===================================
+The Linux perf utility
+======================
 
-`TODO <https://github.com/input-output-hk/hs-opt-handbook.github.io/issues/30>`_
+
+..
+   .. exec:: /code/perf/app/Main.hs
+       :process: haskell
+       :project_dir: code/perf/
+       :with: cabal
+       :args: run
+
+.. exec:: code/lethargy/bench/TooManyClosures.hs
+   :process: haskell
+   :project_dir: code/lethargy/
+   :with: cabal
+   :args: bench lethargy:tooManyClosures

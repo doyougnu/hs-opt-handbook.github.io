@@ -29,11 +29,12 @@ pkgs.stdenv.mkDerivation {
    pname   = "hoh";
    version = "0.0.1";
    src     = ./.;
-   phases = [ "unpackPhase" "preBuild" "buildPhase" "installPhase"];
    buildInputs = pythonInputs ++ nonPythonInputs;
 
    preBuild = ''
    unset SOURCE_DATE_EPOCH
+   export CABAL_DIR=$(mktemp -d)
+   cabal user-config update
   '';
 
    buildPhase = ''
