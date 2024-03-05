@@ -52,7 +52,7 @@ extra-doc-files:    CHANGELOG.md
 -- extra-source-files:
 
 common warnings
-    ghc-options: -Wall
+    ghc-options: -Wall -g -fprof-auto
 
 executable perf
     -- Import common warning flags.
@@ -68,7 +68,8 @@ executable perf
     -- other-extensions:
 
     -- Other library packages from which modules are imported.
-    build-depends:    base ^>=4.17.2.1
+    build-depends:    base
+                    , array
 
     -- Directories containing source files.
     hs-source-dirs:   app

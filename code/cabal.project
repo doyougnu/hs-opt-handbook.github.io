@@ -1,5 +1,10 @@
 packages:
     lethargy
+    perf
+
+package *
+    debug-info: 3
+    profiling-detail: late
 
 profiling: True
 tests: True

@@ -9,7 +9,10 @@ _build
 *.hp
 *.prof
 */__pycache__
+perf.data
+perf.data*
 
 # nix stuff
 .direnv/
 result
+

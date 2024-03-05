@@ -34,14 +34,17 @@
                                     overlays = [ overlay-ghc ];
                                   };
             lethargy = pkgs.callPackage ./lethargy.nix { inherit pkgs; };
+            perf     = pkgs.callPackage ./perf.nix { inherit pkgs; };
         in
 
         rec {
           packages = {
             default = lethargy;
+            perf    = perf;
           };
           devShells = {
             default = packages.default;
+            perf    = packages.perf;
           };
         }
       );
