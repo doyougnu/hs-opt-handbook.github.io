@@ -5,7 +5,6 @@ Measurement, Profiling, and Observation
    :maxdepth: 3
    :name: MPO
 
-   haskell_model
    Binary_Profiling/index
    Thread_Profiling/index
    Cmm_Profiling/index

@@ -14,6 +14,7 @@ Haskell Optimization Handbook
    :titlesonly:
 
    src/Preliminaries/index
+   src/Background/index
    src/Measurement_Observation/index
    src/Optimizations/index
    src/Case_Studies/index
@@ -28,7 +29,9 @@ Indices and tables
    src/glossary
 
 * :ref:`genindex`
+
 * :ref:`search`
+
 * :ref:`glossary`
 
 
