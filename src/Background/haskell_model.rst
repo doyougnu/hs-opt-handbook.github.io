@@ -55,15 +55,17 @@ binding is then compiled into imperative code. The idea is that executing this
 imperative code has the same result as interpreting the functional code. For
 example, ``let b = MkBar x y in foo b`` compiles to:
 
-.. code-block:: C
+.. code-block:: haskell
 
   b <- allocate heap object for `MkBar x y`
   evaluate foo
   apply `foo` to `b`
 
-STG is the last stage in the pipeline that is shared between all of GHC's backends; different backends use different imperative representations for their exact needs. For example, the interpreter
-uses ByteCode, the JavaScript backend uses a subset of JavaScript, all other
-backends use Cmm (pronounced *C minus minus*).
+STG is the last stage in the pipeline that is shared between all of GHC's
+backends; different backends use different imperative representations for their
+exact needs. For example, the interpreter uses ByteCode, the JavaScript backend
+uses a subset of JavaScript, all other backends use Cmm (pronounced *C minus
+minus*).
 
 Cmm: an imperative language that looks like LLVM IR. It supports expressions,
 statements, and it abstracts over machine primops, machine registers, stack
@@ -80,7 +82,8 @@ to manage:
 - IOs: primitives to interact with the operating system
 - dynamic code loading: loading and unloading code objects at runtime.
 
-Note that the RTS itself comes in different flavors. For example, a threaded RTS which uses multiple OS threads to execute Haskell code or not.
+Note that the RTS itself comes in different flavors. For example, a threaded RTS
+which uses multiple OS threads to execute Haskell code or not.
 
 All these compilation stages and the RTS provide knobs to tweak the generated
 code and the behavior of the runtime system. In particular, some probes can be
@@ -101,8 +104,9 @@ be used as arguments for function applications.
 
 The garbage collector is responsible for freeing space in the heap. It runs when
 there is not enough space left or depending on other heuristics. GHC provides
-several :userGuide:`knobs <runtime_control.html#rts-options-to-control-the-garbage-collector>` to configure the garbage collector strategies to use and to tweak
-their properties.
+several :userGuide:`knobs
+<runtime_control.html#rts-options-to-control-the-garbage-collector>` to
+configure the garbage collector strategies to use and to tweak their properties.
 
 The garbage collector used has an impact on profiling. For an extreme example,
 if the heap size is configured to be large enough than your program never has to
@@ -119,6 +123,14 @@ instead of 16 bytes without profiling. Because of this, you may find that your
 code with this profiling enabled triggers more garbage collections than your
 code without this profiling enabled. **You have to be aware of the compilation
 options you use when you make some runtime measurements.**
+
+Mapping STG to Stock Hardware
+-----------------------------
+
+
+
+
+
 
 Consequences on Profiling
 -------------------------
