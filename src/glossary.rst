@@ -3,8 +3,6 @@
 Glossary
 ========
 
-.. glossary::
-
    Arity
 
       The arity of a function is the number of arguments the function must take
@@ -58,6 +56,25 @@ Glossary
          for a glossary entry. If you have a good resource or would like to take
          a stab at this entry then please make an issue and have at it!
 
+   ANF : Normal Forms
+
+      A normal form is a kind of intermediate representation that is commonly
+      used in compilers for functional languages. ANF places constraints on
+      expressions to facilitate the same optimizations and ease of code
+      generation that continuation-passing style compilers achieve without
+      continuation-passing style. In this sense, ANF is an alternative to
+      continuation-passing style.
+
+      ANF separates expressions in a language into two kinds: complex
+      expressions and atomic expressions. Expressions are atomic if they are
+      guaranteed to terminate, can never produce an error, perform no side
+      effects and do no control flow. Complex expressions, then, are the
+      expressions left in the language that are not atomic.
+
+      ANF's restrictions are typically enforced in two ways: First, by only
+      allowing atomic expressions in the argument position of function
+      applications; and second, by requiring that the result of any complex
+      expression is bound by a ``let``.
 
    Boxed : Levity
 
@@ -164,6 +181,15 @@ Glossary
      CAFs are pinned memory and special treatment in the runtime system. Thus,
      heavily allocating CAFs can increase memory residency. See
      :cite:t:`jones1992implementing` Section 10.8 for more details.
+
+   Combinator
+
+      This description comes from the `Haskell wiki
+      <https://wiki.haskell.org/Combinator>`__. This term is used in a technical
+      sense and in an informal sense. In the technical sense, a combinator is a
+      function which does not contain free variables. In the informal sense, a
+      combinator refers to the combinator pattern style of organizing and
+      designing libraries.
 
    DWARF : Format
 
@@ -362,6 +388,14 @@ Glossary
       <https://hackage.haskell.org/package/base-4.17.0.0/docs/GHC-Exts.html>`_
       for an unsafe way to instruct GHC that you have a one-shot lambda.
 
+   Oversaturated
+
+      An application is called *oversaturated* if and only if the application
+      provides more arguments than the function, data constructor, or builtin
+      form expects. For example, the application ``const id id id id 371`` is
+      oversaturated because ``const`` expects exactly two arguments but has been
+      provided 5. See also :term:`saturated` and :term:`unsaturated`.
+
    PAP
 
       A PAP is a partial application. PAPs are heap objects and thus a type of
@@ -384,8 +418,26 @@ Glossary
 
    Reproducer : Debugging
 
-     A reproducer is the smallest known program that induces incorrect behavior
-     in the system. See :ref:`Make it fail` for more.
+      A reproducer is the smallest known program that induces incorrect behavior
+      in the system. See :ref:`Make it fail` for more.
+
+   Saturated
+
+      An application of a function, constructor, or builtin to a number of
+      arguments is called *saturated* if and only if the exact number of the
+      arguments the function, constructor or builtin expects are present in the
+      application. For example, the application ``(+) 1 2`` is saturated because
+      ``(+)`` expects exactly two arguments and these arguments are present in
+      the application. In contrast, ``(+) 1`` is :term:`unsaturated` because
+      ``(+)`` expects two arguments but has only been given one in this case.
+      See also :term:`oversaturated` for an example when an application provides
+      more arguments than expected.
+
+   Scrutinee
+
+      The scrutinee of a case-expression is the expression that the
+      case-expression evaluates. For example, in the expression ``case sum
+      [1..10] of ...`` the scrutinee is the expression ``sum [1..10]``.
 
    Sharing
 
@@ -417,6 +469,18 @@ Glossary
       segment. See `The SRT Note
       <https://gitlab.haskell.org/ghc/ghc/-/blob/master/compiler/GHC/Cmm/Info/Build.hs#L51>`__
       in ``GHC.Cmm.Info.Build`` for more details.
+
+   Super-combinators
+
+      Mathematically, super-combinators are :term:`combinators` with the
+      additional property that the body is an application or applicative form
+      and not itself a :term:`lambda form`. The body may contain lambda forms as
+      long as these are forms are also super-combinators.
+
+      In Haskell, it is not very important to recognize and identify
+      super-combinators. Rather they are a fundamental concept in the design of
+      the g-machine, which was later refined to the STG machine that defines
+      Haskell's execution model. See :cite:t:`supercombinators` and :cite:t:`SpinelessTaglessGMachine`.
 
    Thunk
 
@@ -468,6 +532,15 @@ Glossary
       by optimizations. Unfoldings appear in Core and Interface files to enable
       cross-module inlining and optimizations. See the :ref:`Reading Core
       <Reading Core>` chapter for more.
+
+   Unsaturated
+
+      An application of a function, constructor, or builtin form is called
+      *unsaturated* when there are less arguments in the application than the
+      function, constructor, or builtin form expects. For example, the
+      application ``(+) 1`` is undersaturated because ``(+)`` expects exactly
+      two arguments to reduce to a value but has only been given a single
+      argument.
 
 
    WHNF : Normal Forms

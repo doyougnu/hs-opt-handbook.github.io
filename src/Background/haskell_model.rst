@@ -46,11 +46,11 @@ sums are lowered into unboxed tuples); this is called unarisation.
 
 Additionally every heap allocation is made explicit with a let-binding. For
 example instead of ``foo (MkBar x y)`` you have ``let b = MkBar x y in foo b``.
-This is called `A-normal form<https://en.wikipedia.org/wiki/A-normal_form>`_.
-During code generation from STG we know that all functions are applied to
-"simple" arguments only (variables, constants, etc.).
+This is called *A-normal Form* or :term:`ANF`. During code generation from
+STG we know that all functions are applied to "simple" arguments only
+(variables, constants, etc.).
 
-Following the approach pioneered with "super-combinators", every top-level STG
+Following the approach pioneered with :term:`super-combinators`, every top-level STG
 binding is then compiled into imperative code. The idea is that executing this
 imperative code has the same result as interpreting the functional code. For
 example, ``let b = MkBar x y in foo b`` compiles to:
