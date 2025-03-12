@@ -16,6 +16,8 @@ program.
 - [ ] Have you set up benchmarks? Are they realistic? Do the exercise the full data space?
 - [ ] Are your data types strict? Can you unpack them?
 - [ ] Have you removed excessive polymorphism?
+- [ ] Have you reduced data dependencies?
+- [ ] Are you accidentally creating closures in a hot loop?
 - [ ] Are you using ``Text`` or ``ByteString`` instead of ``String``?
 - [ ] Can you inline and monomorphise critical functions, especially in hot loops?
 - [ ] Are you :ref:`accidentally allocating <excessive-closure-allocation>` in a hot loop?
@@ -39,6 +41,9 @@ program.
 
 ..
   The grouping things should be about data oriented design and using things like zigs arraylist
+
+..
+  Accidentally creating closures can be nuanced, but I want to point out the benefit of eta-expansion and why we want it
 
 .. todo::
    Each item should have a concomitant link.
