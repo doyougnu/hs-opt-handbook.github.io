@@ -1,80 +1,69 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
 
-module PointerLisp (repl) where
+module PointerLisp where
 
 
-import Control.Monad
+import Control.DeepSeq
 import Data.Char
+import Data.Maybe
 import qualified Data.Map as M
-import System.IO
+import GHC.Generics
 
+import Debug.Trace
 
-data Value
-  = Number Int
+data Expr
+  = Number Integer
   | Symbol String
-  | List [Value]
-  | Func ([Value] -> Eval Value)
-  | Lambda [String] Expr Env
+  | List [Expr]
+  | Lambda [Expr] Expr Env
+  | BuiltIn ([Expr] -> Expr)
+  deriving (Generic, NFData)
 
-instance Show Value where
+instance Show Expr where
   show = \case
     Number n -> show n
     Symbol s -> s
     List xs -> "(" ++ unwords (map show xs) ++ ")"
-    Func _ -> "<builtin>"
+    BuiltIn _ -> "<builtin>"
     Lambda {} -> "<lambda>"
 
+fact :: Expr
+fact = Lambda args body env
+  where
+    args = pure $ List [Symbol "n"]
+    body = List [Symbol "if", cond, thn, els]
+    cond = List [Symbol "=", Symbol "n", Number 0]
+    thn  = Number 1
+    els  = List [ Symbol "*"
+                , Symbol "n"
+                , List [ Symbol "fact"
+                       , List [ Symbol "-"
+                              , Symbol "n"
+                              , Number 1
+                              ]
+                       ]
+                ]
+    env = M.insert "fact" fact builtins
+
+mkFactProgram :: Integer -> Eval Expr
+mkFactProgram n = apply fact [Number n]
+
 -- Exprs
-type Expr = Value
-type Env = M.Map String Value
+type Env = M.Map String Expr
 type Eval a = Either String a
-
--- tiny parser
-parse :: String -> Either String Expr
-parse s =
-  case readExpr (tokenize s) of
-    Just (e, []) -> Right e
-    _            -> Left "parse error"
-
-tokenize :: String -> [String]
-tokenize = words . concatMap f
-  where
-    f '(' = " ( "
-    f ')' = " ) "
-    f c   = [c]
-
-readExpr :: [String] -> Maybe (Expr, [String])
-readExpr = \case
-  [] -> Nothing
-  "(" : xs -> readList xs
-  ")" : _  -> Nothing
-  tok : xs -> Just (atom tok, xs)
-
-readList :: [String] -> Maybe (Expr, [String])
-readList = go []
-  where
-    go acc = \case
-      []       -> Nothing
-      ")" : xs -> Just (List (reverse acc), xs)
-      xs       -> do
-        (e, xs') <- readExpr xs
-        go (e : acc) xs'
 
 atom :: String -> Expr
 atom s
   | all isDigit s = Number (read s)
   | otherwise     = Symbol s
 
--- === Evaluation ===
-
-eval :: Env -> Expr -> Eval Value
+eval :: Env -> Expr -> Eval Expr
 eval env = \case
   Number n -> Right (Number n)
-  Symbol s ->
-    maybe (Left $ "unbound symbol: " ++ s) Right (M.lookup s env)
-
-  List [Symbol "quote", x] ->
-    Right x
+  Symbol s -> maybe (Left $ "unbound symbol: " ++ s) Right (M.lookup s env)
+  List [Symbol "quote", x] -> Right x
 
   List [Symbol "if", cond, t, f] -> do
     v <- eval env cond
@@ -87,7 +76,7 @@ eval env = \case
     Right val
 
   List (Symbol "lambda" : List params : body : []) ->
-    Right $ Lambda [ p | Symbol p <- params ] body env
+    Right $ Lambda [ Symbol p | Symbol p <- params ] body env
 
   List (fn : args) -> do
     f <- eval env fn
@@ -96,17 +85,26 @@ eval env = \case
 
   bad -> Left $ "cannot eval: " ++ show bad
 
-apply :: Value -> [Value] -> Eval Value
-apply = \case
-  Func f -> f
-  Lambda params body clo ->
-    \args ->
-      if length params /= length args
-        then Left "arity mismatch"
-        else eval (M.union (M.fromList (zip params args)) clo) body
-  _ -> const $ Left "not a function"
+symToString :: Expr -> Maybe String
+symToString (List [Symbol s]) = Just s
+symToString _          = Nothing
 
--- === Builtins ===
+apply :: Expr -> [Expr] -> Eval Expr
+apply =
+  let die_arity = Left "arity mismatch"
+      die_type  =  Left "not a function"
+  in \case
+    BuiltIn f -> Right . f
+    Lambda params' body clo ->
+      \args ->
+        let params = catMaybes $ fmap symToString params'
+            env    = M.union (M.fromList (zip params args)) clo
+        in
+          if  length params /= length args
+          then die_arity
+          else eval env body
+    _ -> const die_type
+
 
 builtins :: Env
 builtins = M.fromList
@@ -117,33 +115,12 @@ builtins = M.fromList
   , ("=", numCmpOp (==))
   ]
 
-numBinOp :: (Integer -> Integer -> Integer) -> Value
-numBinOp op = Func $ \case
-  [Number a, Number b] -> Right (Number (a `op` b))
-  _ -> Left "expected two numbers"
+numBinOp :: (Integer -> Integer -> Integer) -> Expr
+numBinOp op = BuiltIn $ \case
+  [Number a, Number b] -> Number (a `op` b)
+  _ -> error "numBinOp: bad args"
 
-numCmpOp :: (Integer -> Integer -> Bool) -> Value
-numCmpOp op = Func $ \case
-  [Number a, Number b] ->
-    Right (Number (if a `op` b then 1 else 0))
-  _ -> Left "expected two numbers"
-
--- === REPL ===
-
-repl :: Env -> IO ()
-repl env = do
-  putStr "lisp> "
-  hFlush stdout
-  eof <- isEOF
-  unless eof $ do
-    line <- getLine
-    unless (null line) $
-      case parse line >>= eval env of
-        Left err -> putStrLn ("error: " ++ err)
-        Right v  -> print v
-    repl env
-
-main :: IO ()
-main = do
-  putStrLn "Mini Lisp (Ctrl-D to quit)"
-  repl builtins
+numCmpOp :: (Integer -> Integer -> Bool) -> Expr
+numCmpOp op = BuiltIn $ \case
+  [Number a, Number b] ->  Number (if a `op` b then 1 else 0)
+  _ -> error "numCmpOp: bad args"

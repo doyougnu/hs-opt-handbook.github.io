@@ -58,7 +58,8 @@ library
     import:           warnings
 
     -- Modules exported by the library.
-    exposed-modules:  MyLib
+    exposed-modules:  PointerLisp
+                    -- , IndicesLisp
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -68,6 +69,10 @@ library
 
     -- Other library packages from which modules are imported.
     build-depends:    base ^>=4.20.2.0
+                    , containers
+                    , array
+                    , vector
+                    , deepseq
 
     -- Directories containing source files.
     hs-source-dirs:   src
@@ -75,53 +80,18 @@ library
     -- Base language which the package is written in.
     default-language: Haskell2010
 
-executable indices-over-pointers
-    -- Import common warning flags.
-    import:           warnings
-
-    -- .hs or .lhs file containing the Main module.
-    main-is:          Main.hs
-
-    -- Modules included in this executable, other than Main.
-    -- other-modules:
-
-    -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
-
-    -- Other library packages from which modules are imported.
-    build-depends:
-        base ^>=4.20.2.0,
-        indices-over-pointers
-
-    -- Directories containing source files.
-    hs-source-dirs:   app
-
-    -- Base language which the package is written in.
-    default-language: Haskell2010
-
-test-suite indices-over-pointers-test
-    -- Import common warning flags.
-    import:           warnings
-
-    -- Base language which the package is written in.
-    default-language: Haskell2010
-
-    -- Modules included in this executable, other than Main.
-    -- other-modules:
-
-    -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
-
-    -- The interface type and version of the test suite.
-    type:             exitcode-stdio-1.0
-
-    -- Directories containing source files.
-    hs-source-dirs:   test
-
-    -- The entrypoint to the test suite.
-    main-is:          Main.hs
-
-    -- Test dependencies.
-    build-depends:
-        base ^>=4.20.2.0,
-        indices-over-pointers
+benchmark indices-over-pointers
+  type:              exitcode-stdio-1.0
+  hs-source-dirs:    bench
+  main-is:           Bench.hs
+  build-depends:
+      base >=4.14 && <5
+    , tasty-bench
+    , deepseq
+    , indices-over-pointers
+  ghc-options:
+      -O2
+      -threaded
+      -rtsopts
+      -with-rtsopts=-N
+  default-language:  Haskell2010

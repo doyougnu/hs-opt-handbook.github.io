@@ -1,5 +1,6 @@
 packages:
     lethargy
+    indices_over_pointers
 
 profiling: True
 tests: True

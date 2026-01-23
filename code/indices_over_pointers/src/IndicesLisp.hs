@@ -1,6 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 
-module PointerLisp (repl) where
+module IndicesLisp (repl) where
 
 
 import Control.Monad
@@ -11,9 +11,9 @@ import Data.Array
 
 
 -- Now instead of pointers we use indices
-newtype NumIdx = { unNumIdx :: Int }  deriving newtype Ix
-newtype StringIdx = { unStringIdx :: Int }  deriving newtype Ix
-newtype ExprIdx = { unExprIdx :: Int }  deriving newtype Ix
+newtype NumIdx = NumIdx { unNumIdx :: Int }  deriving newtype Ix
+newtype StringIdx = StringIdx { unStringIdx :: Int }  deriving newtype Ix
+newtype ExprIdx = ExprIdx { unExprIdx :: Int }  deriving newtype Ix
 
 type NumPool = Array NumIdx Int
 type SymPool = Array StringIdx String
@@ -26,16 +26,15 @@ type EnvPool = Array EnvIdx Env
 -- anywhere we had a literal we now have a literalId
 
 -- Expr' are the payloads that our indices point to in our arenas
--- just a test
 data Expr' = Fun' !([ExprIdx] -> Eval ExprIdx)
            | Lambda' ![StringIdx] !ExprIdx Env
 
 data Expr
-  = Number NumIdx
-  | Symbol StringIdx
-  | List   ValIdx
-  | Func   FunIdx
-  | Lambda StringIdx ValIdx EnvIdx
+  = Number  !NumIdx
+  | Symbol  !StringIdx
+  | List    !ValIdx
+  | Func    !FunIdx
+  | Lambda  !StringIdx !ValIdx !EnvIdx
 
 instance Show Value where
   show = \case
