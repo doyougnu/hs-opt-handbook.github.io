@@ -18,7 +18,7 @@ data Expr
   | Symbol String
   | List [Expr]
   | Lambda [Expr] Expr Env
-  | BuiltIn ([Expr] -> Expr)
+  | Builtin ([Expr] -> Expr)
   deriving (Generic, NFData)
 
 instance Show Expr where
@@ -26,7 +26,7 @@ instance Show Expr where
     Number n -> show n
     Symbol s -> s
     List xs -> "(" ++ unwords (map show xs) ++ ")"
-    BuiltIn _ -> "<builtin>"
+    Builtin _ -> "<builtin>"
     Lambda {} -> "<lambda>"
 
 fact :: Expr
@@ -94,7 +94,7 @@ apply =
   let die_arity = Left "arity mismatch"
       die_type  =  Left "not a function"
   in \case
-    BuiltIn f -> Right . f
+    Builtin f -> Right . f
     Lambda params' body clo ->
       \args ->
         let params = catMaybes $ fmap symToString params'
@@ -116,11 +116,11 @@ builtins = M.fromList
   ]
 
 numBinOp :: (Integer -> Integer -> Integer) -> Expr
-numBinOp op = BuiltIn $ \case
+numBinOp op = Builtin $ \case
   [Number a, Number b] -> Number (a `op` b)
   _ -> error "numBinOp: bad args"
 
 numCmpOp :: (Integer -> Integer -> Bool) -> Expr
-numCmpOp op = BuiltIn $ \case
+numCmpOp op = Builtin $ \case
   [Number a, Number b] ->  Number (if a `op` b then 1 else 0)
   _ -> error "numCmpOp: bad args"

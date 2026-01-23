@@ -1,42 +1,53 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE GeneralisedNewtypeDeriving #-}
 
 module IndicesLisp (repl) where
 
 
 import Control.Monad
-import Data.Char
-import qualified Data.Map as M
+import Control.Monad.Reader
+import Control.Monad.IO.Class
+import Data.IntMap (IntMap)
+import qualified Data.IntMap as IM
 import System.IO
-import Data.Array
+import qualified Data.Vector         as V
+import qualified Data.Vector.Mutable as MV
 
 
 -- Now instead of pointers we use indices
-newtype NumIdx = NumIdx { unNumIdx :: Int }  deriving newtype Ix
-newtype StringIdx = StringIdx { unStringIdx :: Int }  deriving newtype Ix
-newtype ExprIdx = ExprIdx { unExprIdx :: Int }  deriving newtype Ix
+newtype NumIdx = NumIdx       { unNumIdx    :: Integer }
+newtype StringIdx = StringIdx { unStringIdx :: Int }
+newtype ExprIdx = ExprIdx     { unExprIdx   :: Int }
+newtype BuiltinIdx = BuiltinIdx { unExprIdx   :: Int }
 
-type NumPool = Array NumIdx Int
-type SymPool = Array StringIdx String
-type ExprPool = Array ExprIdx Expr'
-type EnvPool = Array EnvIdx Env
+type Buf s = MV.MVector s Expr
+data Arena s = Arena { pool :: Buf s -- the backing buffer
+                     , next :: Int   -- the next free slot in the arena
+                     }
 
--- now our AST is half the size but carries indices
--- the pattern is:
--- anywhere we had Expr we now have an ExprId
--- anywhere we had a literal we now have a literalId
+newArena :: Int -> ST s ( s)
+newArena size = do
+  buf <- MV.new size
+  pure $ Arena { pool = buf, next = 0 }
 
--- Expr' are the payloads that our indices point to in our arenas
-data Expr' = Fun' !([ExprIdx] -> Eval ExprIdx)
-           | Lambda' ![StringIdx] !ExprIdx Env
+alloc :: Arena s -> Int -> Expr -> ST s ExprIdx
+alloc Arena{..} !ix expr = do
+  MV.write pool ix expr
+  pure (ExprIdx ix) -- return the handle to the expr
 
+lookup :: Arena s -> ExprIdx -> Expr
+lookup Arena{..} ix = pool V.! ix
+
+-- now our AST is half the size because each indice is 4 bytes rather than a
+-- machine word (8 bytes on x86_64).
 data Expr
   = Number  !NumIdx
   | Symbol  !StringIdx
   | List    !ValIdx
-  | Func    !FunIdx
+  | Builtin !FunIdx
   | Lambda  !StringIdx !ValIdx !EnvIdx
 
-instance Show Value where
+instance Show Expr where
   show = \case
     Number n -> show n
     Symbol s -> s
@@ -45,76 +56,53 @@ instance Show Value where
     Lambda {} -> "<lambda>"
 
 -- Exprs
-type Expr = Value
-type Env = M.Map String Value
-type Eval a = Either String a
+type Env = IM.Map ExprIdx      -- Benefit 2: now env can be keyed on indices
+                               -- rather than Strings. This could even be an
+                               -- array.
 
--- tiny parser
-parse :: String -> Either String Expr
-parse s =
-  case readExpr (tokenize s) of
-    Just (e, []) -> Right e
-    _            -> Left "parse error"
+-- When using this approach we want to scope our memory to the component in our
+-- system. In this case that component is the Evaluator
+data EvalState = EvalState { evalArena :: Arena }
 
-tokenize :: String -> [String]
-tokenize = words . concatMap f
-  where
-    f '(' = " ( "
-    f ')' = " ) "
-    f c   = [c]
+-- Now we define the monad for our component. I chose to use the ReaderT over IO
+-- (well, ST) pattern here because the underlying vector is mutable.
+newtype Eval a = Eval { runEval :: ReaderT EvalState (ST s) a }
+  deriving (Functor, Applicative, Monad, MonadReader EvalState, MonadIO)
 
-readExpr :: [String] -> Maybe (Expr, [String])
-readExpr = \case
-  [] -> Nothing
-  "(" : xs -> readList xs
-  ")" : _  -> Nothing
-  tok : xs -> Just (atom tok, xs)
+-- Now to Eval. First notice the type...TODO
+eval :: Env -> ExprIdx -> Eval ExprIdx
+eval env e_ix = do
+  arena <- asks evalArena
+  case lookup arena e_ix of
+    Number n -> Right
 
-readList :: [String] -> Maybe (Expr, [String])
-readList = go []
-  where
-    go acc = \case
-      []       -> Nothing
-      ")" : xs -> Just (List (reverse acc), xs)
-      xs       -> do
-        (e, xs') <- readExpr xs
-        go (e : acc) xs'
+-- eval env !e_idx = \case
+--   Number n -> Right (Number n)
+--   Symbol s ->
+--     maybe (Left $ "unbound symbol: " ++ s) Right (M.lookup s env)
 
-atom :: String -> Expr
-atom s
-  | all isDigit s = Number (read s)
-  | otherwise     = Symbol s
+--   List [Symbol "quote", x] ->
+--     Right x
 
--- === Evaluation ===
+--   List [Symbol "if", cond, t, f] -> do
+--     v <- eval env cond
+--     case v of
+--       Number 0 -> eval env f
+--       _        -> eval env t
 
-eval :: Env -> Expr -> Eval Value
-eval env = \case
-  Number n -> Right (Number n)
-  Symbol s ->
-    maybe (Left $ "unbound symbol: " ++ s) Right (M.lookup s env)
+--   List [Symbol "define", Symbol name, expr] -> do
+--     val <- eval env expr
+--     Right val
 
-  List [Symbol "quote", x] ->
-    Right x
+--   List (Symbol "lambda" : List params : body : []) ->
+--     Right $ Lambda [ p | Symbol p <- params ] body env
 
-  List [Symbol "if", cond, t, f] -> do
-    v <- eval env cond
-    case v of
-      Number 0 -> eval env f
-      _        -> eval env t
+--   List (fn : args) -> do
+--     f <- eval env fn
+--     xs <- mapM (eval env) args
+--     apply f xs
 
-  List [Symbol "define", Symbol name, expr] -> do
-    val <- eval env expr
-    Right val
-
-  List (Symbol "lambda" : List params : body : []) ->
-    Right $ Lambda [ p | Symbol p <- params ] body env
-
-  List (fn : args) -> do
-    f <- eval env fn
-    xs <- mapM (eval env) args
-    apply f xs
-
-  bad -> Left $ "cannot eval: " ++ show bad
+--   bad -> Left $ "cannot eval: " ++ show bad
 
 apply :: Value -> [Value] -> Eval Value
 apply = \case
