@@ -26,6 +26,7 @@ type EnvPool = Array EnvIdx Env
 -- anywhere we had a literal we now have a literalId
 
 -- Expr' are the payloads that our indices point to in our arenas
+-- just a test
 data Expr' = Fun' !([ExprIdx] -> Eval ExprIdx)
            | Lambda' ![StringIdx] !ExprIdx Env
 
